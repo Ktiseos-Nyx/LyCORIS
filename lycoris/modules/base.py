@@ -6,6 +6,9 @@ import torch.nn.functional as F
 import torch.nn.utils.parametrize as parametrize
 
 from ..utils.quant import QuantLinears, log_bypass, log_suspect
+from ..logging import logger
+from typing import Optional
+import math
 
 
 class ModuleCustomSD(nn.Module):
@@ -78,6 +81,8 @@ class LycorisBaseModule(ModuleCustomSD):
         module_dropout=0.0,
         rank_dropout_scale=False,
         bypass_mode=None,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         """if alpha == 0 or None, alpha is rank (no scaling)."""
@@ -195,6 +200,9 @@ class LycorisBaseModule(ModuleCustomSD):
         self.multiplier = multiplier
         self.org_forward = org_module.forward
         self.org_module = [org_module]
+
+        self.ggpo_sigma = ggpo_sigma
+        self.ggpo_beta = ggpo_beta
 
     @classmethod
     def parametrize(cls, org_module, attr, *args, **kwargs):
@@ -317,3 +325,120 @@ class LycorisBaseModule(ModuleCustomSD):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+    
+    @torch.no_grad()
+    def initialize_norm_cache(self, org_module_weight: torch.Tensor):
+        # Choose a reasonable sample size
+        n_rows = org_module_weight.shape[0]
+        sample_size = min(1000, n_rows)  # Cap at 1000 samples or use all if smaller
+
+        # Sample random indices across all rows
+        indices = torch.randperm(n_rows)[:sample_size]
+
+        # Convert to a supported data type first, then index
+        # Use float32 for indexing operations
+        weights_float32 = org_module_weight.to(dtype=torch.float32)
+        sampled_weights = weights_float32[indices].to(device=self.device)
+
+        # Calculate sampled norms
+        sampled_norms = torch.norm(sampled_weights, dim=1, keepdim=True)
+
+        # Store the mean norm as our estimate
+        self.org_weight_norm_estimate = sampled_norms.mean()
+
+        # Optional: store standard deviation for confidence intervals
+        self.org_weight_norm_std = sampled_norms.std()
+
+        # Free memory
+        del sampled_weights, weights_float32
+
+    @torch.no_grad()
+    def validate_norm_approximation(self, org_module_weight: torch.Tensor, verbose=True):
+        # Calculate the true norm (this will be slow but it's just for validation)
+        true_norms = []
+        chunk_size = 1024  # Process in chunks to avoid OOM
+
+        for i in range(0, org_module_weight.shape[0], chunk_size):
+            end_idx = min(i + chunk_size, org_module_weight.shape[0])
+            chunk = org_module_weight[i:end_idx].to(device=self.device, dtype=self.dtype)
+            chunk_norms = torch.norm(chunk, dim=1, keepdim=True)
+            true_norms.append(chunk_norms.cpu())
+            del chunk
+
+        true_norms = torch.cat(true_norms, dim=0)
+        true_mean_norm = true_norms.mean().item()
+
+        # Compare with our estimate
+        estimated_norm = self.org_weight_norm_estimate.item()
+
+        # Calculate error metrics
+        absolute_error = abs(true_mean_norm - estimated_norm)
+        relative_error = absolute_error / true_mean_norm * 100  # as percentage
+
+        if verbose:
+            logger.info(f"True mean norm: {true_mean_norm:.6f}")
+            logger.info(f"Estimated norm: {estimated_norm:.6f}")
+            logger.info(f"Absolute error: {absolute_error:.6f}")
+            logger.info(f"Relative error: {relative_error:.2f}%")
+
+        return {
+            'true_mean_norm': true_mean_norm,
+            'estimated_norm': estimated_norm,
+            'absolute_error': absolute_error,
+            'relative_error': relative_error
+        }
+
+
+    @torch.no_grad()
+    def update_norms(self):
+        # Not running GGPO so not currently running update norms
+        if self.ggpo_beta is None or self.ggpo_sigma is None:
+            return
+
+        # only update norms when we are training 
+        if self.training is False:
+            return
+        
+        up = self.lora_up.weight
+        down = self.lora_down.weight
+
+        if up.shape == down.shape:
+            module_weights = up @ down
+            module_weights.mul(self.scale)
+
+            self.weight_norms = torch.norm(module_weights, dim=1, keepdim=True)
+            self.combined_weight_norms = torch.sqrt((self.org_weight_norm_estimate**2) + 
+                                            torch.sum(module_weights**2, dim=1, keepdim=True))
+
+    @torch.no_grad()
+    def update_grad_norms(self):
+        if self.training is False:
+            print(f"skipping update_grad_norms for {self.lora_name}")
+            return
+
+        lora_down_grad = None
+        lora_up_grad = None
+
+        lora_up_weight = self.lora_up.weight
+        lora_down_weight = self.lora_down.weight
+
+        for name, param in self.named_parameters():
+            if name == "lora_down.weight":
+                lora_down_grad = param.grad
+            elif name == "lora_up.weight":
+                lora_up_grad = param.grad
+
+        # Calculate gradient norms if we have both gradients
+        if (lora_down_grad is not None and lora_up_weight.shape == lora_down_grad.shape 
+            and lora_up_grad is not None and lora_down_weight.shape == lora_up_grad.shape):
+            with torch.autocast(self.device.type):
+                approx_grad = self.scale * ((lora_up_weight @ lora_down_grad) + (lora_up_grad @ lora_down_weight))
+                self.grad_norms = torch.norm(approx_grad, dim=1, keepdim=True)
+
+    def init_ggpo(self):
+        if self.ggpo_beta is not None and self.ggpo_sigma is not None:
+            self.combined_weight_norms = None
+            self.grad_norms = None
+            self.perturbation_norm_factor = 1.0 / math.sqrt(self.org_module[0].weight.shape[0])
+            self.initialize_norm_cache(self.org_module[0].weight)
+            self.org_module_shape: tuple[int] = self.org_module[0].weight.shape

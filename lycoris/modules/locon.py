@@ -9,6 +9,8 @@ from .base import LycorisBaseModule
 from ..functional.general import rebuild_tucker
 from ..logging import logger
 
+from typing import Optional
+
 
 @cache
 def log_wd():
@@ -52,6 +54,8 @@ class LoConModule(LycorisBaseModule):
         wd_on_out=False,
         bypass_mode=None,
         rs_lora=False,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         """if alpha == 0 or None, alpha is rank (no scaling)."""
@@ -64,6 +68,8 @@ class LoConModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in LoRA/LoCon algo.")
@@ -159,6 +165,8 @@ class LoConModule(LycorisBaseModule):
             torch.nn.init.constant_(self.lora_up.weight, 0)
         if self.tucker:
             torch.nn.init.kaiming_uniform_(self.lora_mid.weight, a=math.sqrt(5))
+
+        self.init_ggpo()
 
     @classmethod
     def make_module_from_state_dict(
@@ -338,6 +346,25 @@ class LoConModule(LycorisBaseModule):
                 if self.org_module[0].bias is None
                 else self.org_module[0].bias.data
             )
-            return self.op(x, weight, bias, **self.kw_dict)
+
+            if self.training and self.ggpo_sigma is not None and self.ggpo_beta is not None and self.combined_weight_norms is not None and self.grad_norms is not None:
+                with torch.no_grad():
+                    perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms ** 2)) + (self.ggpo_beta * (self.grad_norms ** 2))
+                    perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
+                    perturbation = torch.randn(self.org_module_shape,  dtype=self.dtype, device=self.device)
+                    perturbation.mul_(perturbation_scale_factor)
+                    perturbation_output = x @ perturbation.T  # Result: (batch × n)
+                return self.op(x, weight, bias, **self.kw_dict) + perturbation_output
+            else:
+                return self.op(x, weight, bias, **self.kw_dict)
         else:
-            return self.bypass_forward(x, scale=self.multiplier)
+            if self.training and self.ggpo_sigma is not None and self.ggpo_beta is not None and self.combined_weight_norms is not None and self.grad_norms is not None:
+                with torch.no_grad():
+                    perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms ** 2)) + (self.ggpo_beta * (self.grad_norms ** 2))
+                    perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
+                    perturbation = torch.randn(self.org_module_shape,  dtype=self.dtype, device=self.device)
+                    perturbation.mul_(perturbation_scale_factor)
+                    perturbation_output = x @ perturbation.T  # Result: (batch × n)
+                return self.bypass_forward(x, scale=self.multiplier) + perturbation_output
+            else:
+                return self.bypass_forward(x, scale=self.multiplier)

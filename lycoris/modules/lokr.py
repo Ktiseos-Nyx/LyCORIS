@@ -10,6 +10,8 @@ from ..functional import factorization, rebuild_tucker
 from ..functional.lokr import make_kron
 from ..logging import logger
 
+from typing import Optional
+
 
 @cache
 def logging_force_full_matrix(lora_dim, dim, factor):
@@ -63,6 +65,8 @@ class LokrModule(LycorisBaseModule):
         bypass_mode=None,
         rs_lora=False,
         unbalanced_factorization=False,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         super().__init__(
@@ -74,6 +78,8 @@ class LokrModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in LoKr algo.")

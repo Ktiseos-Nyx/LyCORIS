@@ -6,6 +6,8 @@ import torch.nn as nn
 from .base import LycorisBaseModule
 from ..logging import logger
 
+from typing import Optional
+
 
 @cache
 def log_bypass_override():
@@ -41,6 +43,8 @@ class FullModule(LycorisBaseModule):
         use_scalar=False,
         rank_dropout_scale=False,
         bypass_mode=None,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         org_bypass = bypass_mode
@@ -53,6 +57,8 @@ class FullModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma
         )
         if bypass_mode and org_bypass is None:
             self.bypass_mode = False

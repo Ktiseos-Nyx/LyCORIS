@@ -8,6 +8,7 @@ from .base import LycorisBaseModule
 from ..functional import factorization
 from ..logging import logger
 
+from typing import Optional
 
 @cache
 def log_oft_factorize(dim, factor, num, bdim):
@@ -49,6 +50,8 @@ class DiagOFTModule(LycorisBaseModule):
         constraint=0,
         rescaled=False,
         bypass_mode=None,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         super().__init__(
@@ -60,6 +63,8 @@ class DiagOFTModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in Diag-OFT algo.")

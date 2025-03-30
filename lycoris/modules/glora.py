@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from .base import LycorisBaseModule
 from ..functional import tucker_weight_from_conv
 
+from typing import Optional
+
 
 class GLoRAModule(LycorisBaseModule):
     name = "glora"
@@ -42,6 +44,8 @@ class GLoRAModule(LycorisBaseModule):
         weight_decompose=False,
         bypass_mode=None,
         rs_lora=False,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -60,6 +64,8 @@ class GLoRAModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in GLoRA algo.")

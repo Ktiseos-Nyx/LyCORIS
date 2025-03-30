@@ -4,6 +4,8 @@ import torch.nn as nn
 from .base import LycorisBaseModule
 from ..logging import warning_once
 
+from typing import Optional
+
 
 class NormModule(LycorisBaseModule):
     name = "norm"

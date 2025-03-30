@@ -27,6 +27,8 @@ from .utils.preset import read_preset
 from .utils import str_bool
 from .logging import logger
 
+from typing import Optional
+
 
 VALID_PRESET_KEYS = [
     "enable_conv",
@@ -96,6 +98,18 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     bypass_mode = str_bool(kwargs.get("bypass_mode", None))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
 
+    ggpo_beta = kwargs.get("ggpo_beta", None)
+    ggpo_sigma = kwargs.get("ggpo_sigma", None)
+
+    if ggpo_beta is not None:
+        ggpo_beta = float(ggpo_beta)
+
+    if ggpo_sigma is not None:
+        ggpo_sigma = float(ggpo_sigma)
+
+    if ggpo_beta is not None and ggpo_sigma is not None:
+        logger.info(f"LoRA-GGPO training sigma: {ggpo_sigma} beta: {ggpo_beta}")
+
     if unbalanced_factorization:
         logger.info("Unbalanced factorization for LoKr is enabled")
 
@@ -142,6 +156,8 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         full_matrix=full_matrix,
         bypass_mode=bypass_mode,
         unbalanced_factorization=unbalanced_factorization,
+        ggpo_beta=ggpo_beta,
+        ggpo_sigma=ggpo_sigma
     )
 
     return network
@@ -260,6 +276,7 @@ class LycorisNetwork(torch.nn.Module):
         super().__init__()
         root_kwargs = kwargs
         self.weights_sd = None
+
         if init_only:
             self.multiplier = 1
             self.lora_dim = 0
@@ -351,6 +368,8 @@ class LycorisNetwork(torch.nn.Module):
                 self.rank_dropout,
                 self.module_dropout,
                 use_tucker,
+                self.ggpo_beta,
+                self.ggpo_sigma,
                 **kwargs,
             )
             return lora
@@ -537,7 +556,7 @@ class LycorisNetwork(torch.nn.Module):
 
             self.weights_sd = load_file(file)
         else:
-            self.weights_sd = torch.load(file, map_location="cpu")
+            self.weights_sd = torch.load(file, map_location="cpu", weights_only=False)
         missing, unexpected = self.load_state_dict(self.weights_sd, strict=False)
         state = {}
         if missing:
@@ -649,3 +668,32 @@ class LycorisNetwork(torch.nn.Module):
             save_file(state_dict, file, metadata)
         else:
             torch.save(state_dict, file)
+
+    def update_norms(self):
+        for lora in self.text_encoder_loras + self.unet_loras:
+            lora.update_norms()
+
+    def update_grad_norms(self):
+        for lora in self.text_encoder_loras + self.unet_loras:
+            lora.update_grad_norms()
+
+    def grad_norms(self) -> torch.Tensor:
+        grad_norms = []
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if hasattr(lora, "grad_norms") and lora.grad_norms is not None:
+                grad_norms.append(lora.grad_norms.mean(dim=0))
+        return torch.stack(grad_norms) if len(grad_norms) > 0 else torch.tensor([])
+
+    def weight_norms(self) -> torch.Tensor:
+        weight_norms = []
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if hasattr(lora, "weight_norms") and lora.weight_norms is not None:
+                weight_norms.append(lora.weight_norms.mean(dim=0))
+        return torch.stack(weight_norms) if len(weight_norms) > 0 else torch.tensor([])
+
+    def combined_weight_norms(self) -> torch.Tensor:
+        combined_weight_norms = []
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if hasattr(lora, "combined_weight_norms") and lora.combined_weight_norms is not None:
+                combined_weight_norms.append(lora.combined_weight_norms.mean(dim=0))
+        return torch.stack(combined_weight_norms) if len(combined_weight_norms) > 0 else torch.tensor([])

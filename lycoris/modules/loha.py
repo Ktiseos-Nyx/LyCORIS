@@ -6,6 +6,8 @@ import torch.nn as nn
 from .base import LycorisBaseModule
 from ..functional.loha import diff_weight as loha_diff_weight
 
+from typing import Optional
+
 
 class LohaModule(LycorisBaseModule):
     name = "loha"
@@ -44,6 +46,8 @@ class LohaModule(LycorisBaseModule):
         wd_on_out=False,
         bypass_mode=None,
         rs_lora=False,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         super().__init__(
@@ -55,6 +59,8 @@ class LohaModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in LoHa algo.")
