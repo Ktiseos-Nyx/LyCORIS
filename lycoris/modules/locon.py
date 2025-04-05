@@ -329,13 +329,11 @@ class LoConModule(LycorisBaseModule):
         if self.module_dropout and self.training:
             if torch.rand(1) < self.module_dropout:
                 return self.org_forward(x)
-            else:
-                weight = weight + diff_weight * self.multiplier
-            bias = (
-                None
-                else self.org_module[0].bias.data
-            )
-
+        
+        # Check if perturbation is needed - early return if not in training
+        apply_ggpo = (self.training and 
+                    self.ggpo_sigma is not None and 
+                    self.ggpo_beta is not None and 
                     self.combined_weight_norms is not None and 
                     self.grad_norms is not None and
                     (self.module_type == "linear" or self.ggpo_conv))
