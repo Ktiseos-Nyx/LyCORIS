@@ -726,7 +726,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         # Update all modules if <= 0
         if self.ggpo_min_modules_per_batch <= 0:
             for lora in self.text_encoder_loras + self.unet_loras:
-                lora.update_grad_norms()
+                lora.update_norms()
 
         # Only update a subset of modules each call to spread compute cost
         modules_per_batch = max(self.ggpo_min_modules_per_batch, len(self.text_encoder_loras + self.unet_loras) // 5)
