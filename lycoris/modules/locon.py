@@ -56,6 +56,7 @@ class LoConModule(LycorisBaseModule):
         rs_lora=False,
         ggpo_beta: Optional[float] = None,
         ggpo_sigma: Optional[float] = None,
+        ggpo_conv: bool = False,
         **kwargs,
     ):
         """if alpha == 0 or None, alpha is rank (no scaling)."""
@@ -69,7 +70,8 @@ class LoConModule(LycorisBaseModule):
             rank_dropout_scale,
             bypass_mode,
             ggpo_beta,
-            ggpo_sigma
+            ggpo_sigma,
+            ggpo_conv
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in LoRA/LoCon algo.")
@@ -327,44 +329,91 @@ class LoConModule(LycorisBaseModule):
         if self.module_dropout and self.training:
             if torch.rand(1) < self.module_dropout:
                 return self.org_forward(x)
-        scale = self.scale
-
-        dtype = self.dtype
-        if not self.bypass_mode:
-            diff_weight = self.make_weight(x.device).to(dtype) * scale
-            weight = self.org_module[0].weight.data.to(dtype)
-            if self.wd:
-                weight = self.apply_weight_decompose(
-                    weight + diff_weight, self.multiplier
-                )
-                # Apply dropout to the input as per the DORA paper
-                x = self.dropout(x)
             else:
                 weight = weight + diff_weight * self.multiplier
             bias = (
                 None
-                if self.org_module[0].bias is None
                 else self.org_module[0].bias.data
             )
 
-            if self.training and self.ggpo_sigma is not None and self.ggpo_beta is not None and self.combined_weight_norms is not None and self.grad_norms is not None:
+                    self.combined_weight_norms is not None and 
+                    self.grad_norms is not None and
+                    (self.module_type == "linear" or self.ggpo_conv))
+        
+        # Handle bypass mode first - simpler path
+        if self.bypass_mode:
+            result = self.bypass_forward(x, scale=self.multiplier)
+            
+            if apply_ggpo:
                 with torch.no_grad():
-                    perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms ** 2)) + (self.ggpo_beta * (self.grad_norms ** 2))
+                    # Calculate perturbation scale more efficiently
+                    perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
                     perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
-                    perturbation = torch.randn(self.org_module_shape,  dtype=self.dtype, device=self.device)
-                    perturbation.mul_(perturbation_scale_factor)
-                    perturbation_output = x @ perturbation.T  # Result: (batch × n)
-                return self.op(x, weight, bias, **self.kw_dict) + perturbation_output
-            else:
-                return self.op(x, weight, bias, **self.kw_dict)
+                    
+                    # Pre-shape the scale factor for broadcasting to avoid reshape operations
+                    if self.module_type == "linear":
+                        # For linear layers, shape for matrix multiplication
+                        perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
+                        perturbation = perturbation * perturbation_scale_factor.view(-1, 1)
+                        perturbation_output = x @ perturbation.T
+                    else:
+                        # For convolution layers, use convolution directly with efficient shaping
+                        # Create perturbation with correct shape for the specific conv type
+                        perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
+                        
+                        # Apply scaling with proper broadcasting
+                        view_shape = [perturbation.shape[0]] + [1] * (len(perturbation.shape) - 1)
+                        perturbation = perturbation * perturbation_scale_factor.view(*view_shape)
+                        
+                        # Apply using appropriate convolution operation
+                        perturbation_output = self.op(x, perturbation, None, **self.kw_dict)
+                    
+                # Add perturbation to result and return
+                return result + perturbation_output
+                    
+            return result
+        
+        # Non-bypass mode with perturbation
+        dtype = self.dtype
+        diff_weight = self.make_weight(x.device).to(dtype) * self.scale
+        weight = self.org_module[0].weight.data.to(dtype)
+        
+        if self.wd:
+            weight = self.apply_weight_decompose(weight + diff_weight, self.multiplier)
+            x = self.dropout(x)
         else:
-            if self.training and self.ggpo_sigma is not None and self.ggpo_beta is not None and self.combined_weight_norms is not None and self.grad_norms is not None:
-                with torch.no_grad():
-                    perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms ** 2)) + (self.ggpo_beta * (self.grad_norms ** 2))
-                    perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
-                    perturbation = torch.randn(self.org_module_shape,  dtype=self.dtype, device=self.device)
-                    perturbation.mul_(perturbation_scale_factor)
-                    perturbation_output = x @ perturbation.T  # Result: (batch × n)
-                return self.bypass_forward(x, scale=self.multiplier) + perturbation_output
-            else:
-                return self.bypass_forward(x, scale=self.multiplier)
+            weight = weight + diff_weight * self.multiplier
+        
+        bias = None if self.org_module[0].bias is None else self.org_module[0].bias.data
+        
+        # Apply operation with weights
+        result = self.op(x, weight, bias, **self.kw_dict)
+        
+        # Apply GGPO perturbation if needed
+        if apply_ggpo:
+            with torch.no_grad():
+                # More efficient scale calculation
+                perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
+                perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
+                
+                # Optimized perturbation generation based on module type
+                if self.module_type == "linear":
+                    # For linear layers, use efficient matrix multiplication
+                    perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
+                    perturbation = perturbation * perturbation_scale_factor.view(-1, 1)
+                    perturbation_output = x @ perturbation.T
+                else:
+                    # For convolution layers, generate efficient perturbation
+                    perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
+                    
+                    # Apply scaling with efficient broadcasting
+                    view_shape = [perturbation.shape[0]] + [1] * (len(perturbation.shape) - 1)
+                    perturbation = perturbation * perturbation_scale_factor.view(*view_shape)
+                    
+                    # Use the appropriate convolution operation
+                    perturbation_output = self.op(x, perturbation, None, **self.kw_dict)
+                
+            # Add perturbation to result
+            result = result + perturbation_output
+        
+        return result

@@ -9,6 +9,8 @@ import numpy as np
 
 import torch
 
+import math
+
 from .utils import precalculate_safetensors_hashes
 from .wrapper import LycorisNetwork, network_module_dict, deprecated_arg_dict
 from .modules.locon import LoConModule
@@ -68,12 +70,16 @@ def create_network(
     
     ggpo_beta = kwargs.get("ggpo_beta", None)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
+    ggpo_conv = kwargs.get("ggpo_conv", False)
 
     if ggpo_beta is not None:
         ggpo_beta = float(ggpo_beta)
 
     if ggpo_sigma is not None:
         ggpo_sigma = float(ggpo_sigma)
+
+    if ggpo_conv is not None:
+        ggpo_conv = bool(ggpo_conv)
 
     if ggpo_beta is not None and ggpo_sigma is not None:
         logger.info(f"LoRA-GGPO training sigma: {ggpo_sigma} beta: {ggpo_beta}")
@@ -131,7 +137,8 @@ def create_network(
         unbalanced_factorization=unbalanced_factorization,
         train_t5xxl=train_t5xxl,
         ggpo_beta=ggpo_beta,
-        ggpo_sigma=ggpo_sigma
+        ggpo_sigma=ggpo_sigma,
+        ggpo_conv=ggpo_conv,
     )
 
     return network
@@ -306,6 +313,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         self.multiplier = multiplier
         self.lora_dim = lora_dim
         self.train_t5xxl = train_t5xxl
+        self._current_step = 0
 
         if not self.ENABLE_CONV:
             conv_lora_dim = 0
@@ -678,31 +686,148 @@ class LycorisNetworkKohya(LycorisNetwork):
         else:
             torch.save(state_dict, file)
 
+    @torch.no_grad()
     def update_norms(self):
-        for lora in self.text_encoder_loras + self.unet_loras:
-            lora.update_norms()
+        """
+        Update the norms for all modules efficiently with batched updates.
+        Speeds up the process by updating modules in groups.
+        """
+        # Only update a subset of modules each call to spread compute cost
+        modules_per_batch = max(1, len(self.text_encoder_loras + self.unet_loras) // 5)
+        
+        # Use a rotating index to cycle through all modules
+        if not hasattr(self, '_norm_update_index'):
+            self._norm_update_index = 0
+        
+        # Get modules to update in this batch
+        all_modules = self.text_encoder_loras + self.unet_loras
+        if not all_modules:
+            return
+            
+        # Calculate start and end indices for this batch
+        start_idx = self._norm_update_index
+        end_idx = min(start_idx + modules_per_batch, len(all_modules))
+        
+        # Update only the selected modules
+        for i in range(start_idx, end_idx):
+            all_modules[i].update_norms()
+        
+        # Update index for next call, with wraparound
+        self._norm_update_index = end_idx % len(all_modules)
+        if self._norm_update_index >= len(all_modules):
+            self._norm_update_index = 0
 
+    @torch.no_grad()
     def update_grad_norms(self):
-        for lora in self.text_encoder_loras + self.unet_loras:
-            lora.update_grad_norms()
+        """
+        Update the gradient norms efficiently with batched updates.
+        """
+        # Only update a subset of modules each call to spread compute cost
+        modules_per_batch = max(1, len(self.text_encoder_loras + self.unet_loras) // 5)
+        
+        # Use a rotating index to cycle through all modules
+        if not hasattr(self, '_grad_update_index'):
+            self._grad_update_index = 0
+        
+        # Get modules to update in this batch
+        all_modules = self.text_encoder_loras + self.unet_loras
+        if not all_modules:
+            return
+            
+        # Calculate start and end indices for this batch
+        start_idx = self._grad_update_index
+        end_idx = min(start_idx + modules_per_batch, len(all_modules))
+        
+        # Update only the selected modules
+        for i in range(start_idx, end_idx):
+            all_modules[i].update_grad_norms()
+        
+        # Update index for next call, with wraparound
+        self._grad_update_index = end_idx % len(all_modules)
+        if self._grad_update_index >= len(all_modules):
+            self._grad_update_index = 0
 
+    @torch.no_grad()
     def grad_norms(self) -> torch.Tensor:
-        grad_norms = []
+        """Efficiently collect gradient norms from all modules."""
+        # Use cached values when possible
+        if hasattr(self, '_cached_grad_norms') and self._norm_cache_step == self._current_step:
+            return self._cached_grad_norms
+            
+        # Collect norms 
+        all_norms = []
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "grad_norms") and lora.grad_norms is not None:
-                grad_norms.append(lora.grad_norms.mean(dim=0))
-        return torch.stack(grad_norms) if len(grad_norms) > 0 else torch.tensor([])
+                # Take mean of each module's gradient norms to get a scalar
+                try:
+                    module_norm = lora.grad_norms.mean().item()
+                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                        all_norms.append(module_norm)
+                except:
+                    # Skip problematic modules
+                    continue
+        
+        # Create tensor from scalars (very efficient)
+        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        
+        # Cache the result
+        self._cached_grad_norms = result
+        self._norm_cache_step = getattr(self, '_current_step', 0)
+        
+        return result
 
+    @torch.no_grad()
     def weight_norms(self) -> torch.Tensor:
-        weight_norms = []
+        """Efficiently collect weight norms from all modules."""
+        # Use cached values when possible
+        if hasattr(self, '_cached_weight_norms') and self._norm_cache_step == self._current_step:
+            return self._cached_weight_norms
+            
+        # Collect norms efficiently
+        all_norms = []
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "weight_norms") and lora.weight_norms is not None:
-                weight_norms.append(lora.weight_norms.mean(dim=0))
-        return torch.stack(weight_norms) if len(weight_norms) > 0 else torch.tensor([])
+                try:
+                    module_norm = lora.weight_norms.mean().item()
+                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                        all_norms.append(module_norm)
+                except:
+                    # Skip problematic modules
+                    continue
+        
+        # Create tensor from scalars
+        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        
+        # Cache the result
+        self._cached_weight_norms = result
+        self._norm_cache_step = getattr(self, '_current_step', 0)
+        
+        return result
 
+    @torch.no_grad()
     def combined_weight_norms(self) -> torch.Tensor:
-        combined_weight_norms = []
+        """Efficiently collect combined weight norms from all modules."""
+        # Use cached values when possible
+        if hasattr(self, '_cached_combined_norms') and self._norm_cache_step == self._current_step:
+            return self._cached_combined_norms
+            
+        # Collect norms efficiently
+        all_norms = []
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "combined_weight_norms") and lora.combined_weight_norms is not None:
-                combined_weight_norms.append(lora.combined_weight_norms.mean(dim=0))
-        return torch.stack(combined_weight_norms) if len(combined_weight_norms) > 0 else torch.tensor([])
+                try:
+                    module_norm = lora.combined_weight_norms.mean().item()
+                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                        all_norms.append(module_norm)
+                except:
+                    # Skip problematic modules
+                    continue
+        
+        # Create tensor from scalars
+        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        
+        # Cache the result
+        self._cached_combined_norms = result
+        self._norm_cache_step = getattr(self, '_current_step', 0)
+        
+        return result
