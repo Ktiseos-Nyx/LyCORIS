@@ -72,7 +72,7 @@ def create_network(
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
     ggpo_conv = kwargs.get("ggpo_conv", False)
     ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
-    ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", 1)
+    ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", -1)
 
     if ggpo_beta is not None:
         ggpo_beta = float(ggpo_beta)
@@ -329,7 +329,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
-        self.ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", 1)
+        self.ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", -1)
 
         if self.ggpo_beta is not None:
             self.ggpo_beta = float(self.ggpo_beta)
