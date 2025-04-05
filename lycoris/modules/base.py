@@ -84,6 +84,7 @@ class LycorisBaseModule(ModuleCustomSD):
         ggpo_beta: Optional[float] = None,
         ggpo_sigma: Optional[float] = None,
         ggpo_conv: bool = False,
+        ggpo_conv_weight_sample_size: int = 100,
         **kwargs,
     ):
         """if alpha == 0 or None, alpha is rank (no scaling)."""
@@ -205,6 +206,7 @@ class LycorisBaseModule(ModuleCustomSD):
         self.ggpo_sigma = ggpo_sigma
         self.ggpo_beta = ggpo_beta
         self.ggpo_conv = ggpo_conv
+        self.ggpo_conv_weight_sample_size = ggpo_conv_weight_sample_size
 
     @classmethod
     def parametrize(cls, org_module, attr, *args, **kwargs):
@@ -449,14 +451,14 @@ class LycorisBaseModule(ModuleCustomSD):
                     down = self.lora_down.weight
                     
                     # Sample a small subset of weights to estimate norm
-                    sample_size = min(100, up.size(0))
+                    sample_size = min(self.ggpo_conv_weight_sample_size, up.size(0))
                     if sample_size < up.size(0):
                         up_indices = torch.randperm(up.size(0))[:sample_size]
                         up_sample = up[up_indices]
                     else:
                         up_sample = up
                         
-                    sample_size = min(100, down.size(0))
+                    sample_size = min(self.ggpo_conv_weight_sample_size, down.size(0))
                     if sample_size < down.size(0):
                         down_indices = torch.randperm(down.size(0))[:sample_size]
                         down_sample = down[down_indices]

@@ -102,12 +102,24 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
 
     ggpo_beta = kwargs.get("ggpo_beta", None)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
+    ggpo_conv = kwargs.get("ggpo_conv", False)
+    ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
+    ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", 1)
 
     if ggpo_beta is not None:
         ggpo_beta = float(ggpo_beta)
 
     if ggpo_sigma is not None:
         ggpo_sigma = float(ggpo_sigma)
+
+    if ggpo_conv is not None:
+        ggpo_conv = bool(ggpo_conv)
+
+    if ggpo_conv_weight_sample_size is not None:
+        ggpo_conv_weight_sample_size = int(ggpo_conv_weight_sample_size)
+
+    if ggpo_min_modules_per_batch is not None:
+        ggpo_min_modules_per_batch = int(ggpo_min_modules_per_batch)
 
     if ggpo_beta is not None and ggpo_sigma is not None:
         logger.info(f"LoRA-GGPO training sigma: {ggpo_sigma} beta: {ggpo_beta}")
@@ -159,7 +171,9 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         bypass_mode=bypass_mode,
         unbalanced_factorization=unbalanced_factorization,
         ggpo_beta=ggpo_beta,
-        ggpo_sigma=ggpo_sigma
+        ggpo_sigma=ggpo_sigma,
+        ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
+        ggpo_min_modules_per_batch=ggpo_min_modules_per_batch,
     )
 
     return network
@@ -280,18 +294,26 @@ class LycorisNetwork(torch.nn.Module):
         self.weights_sd = None
         self._current_step = 0
 
-        ggpo_beta = kwargs.get("ggpo_beta", None)
-        ggpo_sigma = kwargs.get("ggpo_sigma", None)
-        ggpo_conv = kwargs.get("ggpo_conv", False)
+        self.ggpo_beta = kwargs.get("ggpo_beta", None)
+        self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
+        self.ggpo_conv = kwargs.get("ggpo_conv", False)
+        self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
+        self.ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", 1)
 
-        if ggpo_beta is not None:
-            self.ggpo_beta = float(ggpo_beta)
+        if self.ggpo_beta is not None:
+            self.ggpo_beta = float(self.ggpo_beta)
 
-        if ggpo_sigma is not None:
-            self.ggpo_sigma = float(ggpo_sigma)
+        if self.ggpo_sigma is not None:
+            self.ggpo_sigma = float(self.ggpo_sigma)
 
         if self.ggpo_conv is not None:
-            self.ggpo_conv = bool(ggpo_conv)
+            self.ggpo_conv = bool(self.ggpo_conv)
+
+        if self.ggpo_conv_weight_sample_size is not None:
+            self.ggpo_conv_weight_sample_size = int(self.ggpo_conv_weight_sample_size)
+
+        if self.ggpo_min_modules_per_batch is not None:
+            self.ggpo_min_modules_per_batch = int(self.ggpo_min_modules_per_batch)
 
         if init_only:
             self.multiplier = 1
@@ -386,6 +408,8 @@ class LycorisNetwork(torch.nn.Module):
                 use_tucker,
                 self.ggpo_beta,
                 self.ggpo_sigma,
+                self.ggpo_conv,
+                self.ggpo_conv_weight_sample_size,
                 **kwargs,
             )
             return lora
@@ -691,8 +715,14 @@ class LycorisNetwork(torch.nn.Module):
         Update the norms for all modules efficiently with batched updates.
         Speeds up the process by updating modules in groups.
         """
+
+        # Update all modules if <= 0
+        if self.ggpo_min_modules_per_batch <= 0:
+            for lora in self.text_encoder_loras + self.unet_loras:
+                lora.update_grad_norms()
+
         # Only update a subset of modules each call to spread compute cost
-        modules_per_batch = max(1, len(self.text_encoder_loras + self.unet_loras) // 5)
+        modules_per_batch = max(self.ggpo_min_modules_per_batch, len(self.text_encoder_loras + self.unet_loras) // 5)
         
         # Use a rotating index to cycle through all modules
         if not hasattr(self, '_norm_update_index'):
@@ -721,8 +751,14 @@ class LycorisNetwork(torch.nn.Module):
         """
         Update the gradient norms efficiently with batched updates.
         """
+
+        # Update all modules if <= 0
+        if self.ggpo_min_modules_per_batch <= 0:
+            for lora in self.text_encoder_loras + self.unet_loras:
+                lora.update_grad_norms()
+
         # Only update a subset of modules each call to spread compute cost
-        modules_per_batch = max(1, len(self.text_encoder_loras + self.unet_loras) // 5)
+        modules_per_batch = max(self.ggpo_min_modules_per_batch, len(self.text_encoder_loras + self.unet_loras) // 5)
         
         # Use a rotating index to cycle through all modules
         if not hasattr(self, '_grad_update_index'):
