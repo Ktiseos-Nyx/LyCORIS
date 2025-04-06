@@ -72,7 +72,6 @@ def create_network(
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
     ggpo_conv = kwargs.get("ggpo_conv", False)
     ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
-    ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", -1)
 
     if ggpo_beta is not None:
         ggpo_beta = float(ggpo_beta)
@@ -85,9 +84,6 @@ def create_network(
 
     if ggpo_conv_weight_sample_size is not None:
         ggpo_conv_weight_sample_size = int(ggpo_conv_weight_sample_size)
-
-    if ggpo_min_modules_per_batch is not None:
-        ggpo_min_modules_per_batch = int(ggpo_min_modules_per_batch)
 
     if ggpo_beta is not None and ggpo_sigma is not None:
         logger.info(f"LoRA-GGPO training sigma: {ggpo_sigma} beta: {ggpo_beta}")
@@ -148,7 +144,6 @@ def create_network(
         ggpo_sigma=ggpo_sigma,
         ggpo_conv=ggpo_conv,
         ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
-        ggpo_min_modules_per_batch=ggpo_min_modules_per_batch,
     )
 
     return network
@@ -329,7 +324,6 @@ class LycorisNetworkKohya(LycorisNetwork):
         self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
-        self.ggpo_min_modules_per_batch = kwargs.get("ggpo_min_modules_per_batch", -1)
 
         if self.ggpo_beta is not None:
             self.ggpo_beta = float(self.ggpo_beta)
@@ -342,9 +336,6 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         if self.ggpo_conv_weight_sample_size is not None:
             self.ggpo_conv_weight_sample_size = int(self.ggpo_conv_weight_sample_size)
-
-        if self.ggpo_min_modules_per_batch is not None:
-            self.ggpo_min_modules_per_batch = int(self.ggpo_min_modules_per_batch)
 
         if not self.ENABLE_CONV:
             conv_lora_dim = 0
@@ -719,80 +710,19 @@ class LycorisNetworkKohya(LycorisNetwork):
 
     @torch.no_grad()
     def update_norms(self):
-        """
-        Update the norms for all modules efficiently with batched updates.
-        Speeds up the process by updating modules in groups.
-        """
-        # Update all modules if <= 0
-        if self.ggpo_min_modules_per_batch <= 0:
-            for lora in self.text_encoder_loras + self.unet_loras:
-                lora.update_norms()
-
-        # Only update a subset of modules each call to spread compute cost
-        modules_per_batch = max(self.ggpo_min_modules_per_batch, len(self.text_encoder_loras + self.unet_loras) // 5)
-        
-        # Use a rotating index to cycle through all modules
-        if not hasattr(self, '_norm_update_index'):
-            self._norm_update_index = 0
-        
-        # Get modules to update in this batch
-        all_modules = self.text_encoder_loras + self.unet_loras
-        if not all_modules:
-            return
-            
-        # Calculate start and end indices for this batch
-        start_idx = self._norm_update_index
-        end_idx = min(start_idx + modules_per_batch, len(all_modules))
-        
-        # Update only the selected modules
-        for i in range(start_idx, end_idx):
-            all_modules[i].update_norms()
-        
-        # Update index for next call, with wraparound
-        self._norm_update_index = end_idx % len(all_modules)
-        if self._norm_update_index >= len(all_modules):
-            self._norm_update_index = 0
+        for lora in self.text_encoder_loras + self.unet_loras:
+            lora.update_norms()
 
     @torch.no_grad()
     def update_grad_norms(self):
-        """
-        Update the gradient norms efficiently with batched updates.
-        """
-        # Update all modules if <= 0
-        if self.ggpo_min_modules_per_batch <= 0:
-            for lora in self.text_encoder_loras + self.unet_loras:
-                lora.update_grad_norms()
-
-        # Only update a subset of modules each call to spread compute cost
-        modules_per_batch = max(self.ggpo_min_modules_per_batch, len(self.text_encoder_loras + self.unet_loras) // 5)
-        
-        # Use a rotating index to cycle through all modules
-        if not hasattr(self, '_grad_update_index'):
-            self._grad_update_index = 0
-        
-        # Get modules to update in this batch
-        all_modules = self.text_encoder_loras + self.unet_loras
-        if not all_modules:
-            return
-            
-        # Calculate start and end indices for this batch
-        start_idx = self._grad_update_index
-        end_idx = min(start_idx + modules_per_batch, len(all_modules))
-        
-        # Update only the selected modules
-        for i in range(start_idx, end_idx):
-            all_modules[i].update_grad_norms()
-        
-        # Update index for next call, with wraparound
-        self._grad_update_index = end_idx % len(all_modules)
-        if self._grad_update_index >= len(all_modules):
-            self._grad_update_index = 0
+        for lora in self.text_encoder_loras + self.unet_loras:
+            lora.update_grad_norms()
 
     @torch.no_grad()
     def grad_norms(self) -> torch.Tensor:
         """Efficiently collect gradient norms from all modules."""
         # Use cached values when possible
-        if hasattr(self, '_cached_grad_norms') and self._norm_cache_step == self._current_step:
+        if hasattr(self, '_cached_grad_norms') and self._grad_norm_cache_step == self._current_step:
             return self._cached_grad_norms
             
         # Collect norms 
@@ -813,7 +743,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         
         # Cache the result
         self._cached_grad_norms = result
-        self._norm_cache_step = getattr(self, '_current_step', 0)
+        self._grad_norm_cache_step = getattr(self, '_current_step', 0)
         
         return result
 
@@ -821,7 +751,7 @@ class LycorisNetworkKohya(LycorisNetwork):
     def weight_norms(self) -> torch.Tensor:
         """Efficiently collect weight norms from all modules."""
         # Use cached values when possible
-        if hasattr(self, '_cached_weight_norms') and self._norm_cache_step == self._current_step:
+        if hasattr(self, '_cached_weight_norms') and self._weight_norm_cache_step == self._current_step:
             return self._cached_weight_norms
             
         # Collect norms efficiently
@@ -841,7 +771,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         
         # Cache the result
         self._cached_weight_norms = result
-        self._norm_cache_step = getattr(self, '_current_step', 0)
+        self._weight_norm_cache_step = getattr(self, '_current_step', 0)
         
         return result
 
@@ -849,7 +779,7 @@ class LycorisNetworkKohya(LycorisNetwork):
     def combined_weight_norms(self) -> torch.Tensor:
         """Efficiently collect combined weight norms from all modules."""
         # Use cached values when possible
-        if hasattr(self, '_cached_combined_norms') and self._norm_cache_step == self._current_step:
+        if hasattr(self, '_cached_combined_norms') and self._combined_weight_norm_cache_step == self._current_step:
             return self._cached_combined_norms
             
         # Collect norms efficiently
@@ -869,6 +799,6 @@ class LycorisNetworkKohya(LycorisNetwork):
         
         # Cache the result
         self._cached_combined_norms = result
-        self._norm_cache_step = getattr(self, '_current_step', 0)
+        self._combined_weight_norm_cache_step = getattr(self, '_current_step', 0)
         
         return result
