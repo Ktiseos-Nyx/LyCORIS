@@ -591,6 +591,7 @@ class LycorisBaseModule(ModuleCustomSD):
         if self.ggpo_beta is not None and self.ggpo_sigma is not None:
             self.combined_weight_norms = None
             self.grad_norms = None
+            self.weight_norms = None
             self.perturbation_norm_factor = 1.0 / math.sqrt(self.org_module[0].weight.shape[0])
             self.initialize_norm_cache(self.org_module[0].weight)
             self.org_module_shape: tuple[int] = self.org_module[0].weight.shape
