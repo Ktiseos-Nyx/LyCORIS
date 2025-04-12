@@ -11,7 +11,7 @@ prodigyopt==1.1.1
 lion-pytorch==0.2.3
 schedulefree==1.4
 tensorboard==2.18.0
-safetensors==0.5.2
+safetensors==0.5.3
 hpsv2==1.2.0
 # gradio==3.16.2
 altair==5.5.0
@@ -21,7 +21,7 @@ toml==0.10.2
 voluptuous==0.15.2
 huggingface-hub==0.27.1
 matplotlib==3.10.0
-scipy==1.15.0
+scipy==1.15.2
 # for Image utils
 imagesize==1.4.1
 # for BLIP captioning

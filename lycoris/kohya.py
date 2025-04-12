@@ -3,11 +3,13 @@ import fnmatch
 import re
 import logging
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 import numpy as np
 
 import torch
+
+import math
 
 from .utils import precalculate_safetensors_hashes
 from .wrapper import LycorisNetwork, network_module_dict, deprecated_arg_dict
@@ -65,6 +67,26 @@ def create_network(
     rs_lora = str_bool(kwargs.get("rs_lora", False))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
     train_t5xxl = str_bool(kwargs.get("train_t5xxl", False))
+    
+    ggpo_beta = kwargs.get("ggpo_beta", None)
+    ggpo_sigma = kwargs.get("ggpo_sigma", None)
+    ggpo_conv = kwargs.get("ggpo_conv", False)
+    ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
+
+    if ggpo_beta is not None:
+        ggpo_beta = float(ggpo_beta)
+
+    if ggpo_sigma is not None:
+        ggpo_sigma = float(ggpo_sigma)
+
+    if ggpo_conv is not None:
+        ggpo_conv = bool(ggpo_conv)
+
+    if ggpo_conv_weight_sample_size is not None:
+        ggpo_conv_weight_sample_size = int(ggpo_conv_weight_sample_size)
+
+    if ggpo_beta is not None and ggpo_sigma is not None:
+        logger.info(f"LoRA-GGPO training sigma: {ggpo_sigma} beta: {ggpo_beta}")
 
     if unbalanced_factorization:
         logger.info("Unbalanced factorization for LoKr is enabled")
@@ -118,6 +140,10 @@ def create_network(
         rs_lora=rs_lora,
         unbalanced_factorization=unbalanced_factorization,
         train_t5xxl=train_t5xxl,
+        ggpo_beta=ggpo_beta,
+        ggpo_sigma=ggpo_sigma,
+        ggpo_conv=ggpo_conv,
+        ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
     )
 
     return network
@@ -292,6 +318,24 @@ class LycorisNetworkKohya(LycorisNetwork):
         self.multiplier = multiplier
         self.lora_dim = lora_dim
         self.train_t5xxl = train_t5xxl
+        self._current_step = 0
+
+        self.ggpo_beta = kwargs.get("ggpo_beta", None)
+        self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
+        self.ggpo_conv = kwargs.get("ggpo_conv", False)
+        self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
+
+        if self.ggpo_beta is not None:
+            self.ggpo_beta = float(self.ggpo_beta)
+
+        if self.ggpo_sigma is not None:
+            self.ggpo_sigma = float(self.ggpo_sigma)
+
+        if self.ggpo_conv is not None:
+            self.ggpo_conv = bool(self.ggpo_conv)
+
+        if self.ggpo_conv_weight_sample_size is not None:
+            self.ggpo_conv_weight_sample_size = int(self.ggpo_conv_weight_sample_size)
 
         if not self.ENABLE_CONV:
             conv_lora_dim = 0
@@ -663,3 +707,98 @@ class LycorisNetworkKohya(LycorisNetwork):
             save_file(state_dict, file, metadata)
         else:
             torch.save(state_dict, file)
+
+    @torch.no_grad()
+    def update_norms(self):
+        for lora in self.text_encoder_loras + self.unet_loras:
+            lora.update_norms()
+
+    @torch.no_grad()
+    def update_grad_norms(self):
+        for lora in self.text_encoder_loras + self.unet_loras:
+            lora.update_grad_norms()
+
+    @torch.no_grad()
+    def grad_norms(self) -> torch.Tensor:
+        """Efficiently collect gradient norms from all modules."""
+        # Use cached values when possible
+        if hasattr(self, '_cached_grad_norms') and self._grad_norm_cache_step == self._current_step:
+            return self._cached_grad_norms
+            
+        # Collect norms 
+        all_norms = []
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if hasattr(lora, "grad_norms") and lora.grad_norms is not None:
+                # Take mean of each module's gradient norms to get a scalar
+                try:
+                    module_norm = lora.grad_norms.mean().item()
+                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                        all_norms.append(module_norm)
+                except:
+                    # Skip problematic modules
+                    continue
+        
+        # Create tensor from scalars (very efficient)
+        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        
+        # Cache the result
+        self._cached_grad_norms = result
+        self._grad_norm_cache_step = getattr(self, '_current_step', 0)
+        
+        return result
+
+    @torch.no_grad()
+    def weight_norms(self) -> torch.Tensor:
+        """Efficiently collect weight norms from all modules."""
+        # Use cached values when possible
+        if hasattr(self, '_cached_weight_norms') and self._weight_norm_cache_step == self._current_step:
+            return self._cached_weight_norms
+            
+        # Collect norms efficiently
+        all_norms = []
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if hasattr(lora, "weight_norms") and lora.weight_norms is not None:
+                try:
+                    module_norm = lora.weight_norms.mean().item()
+                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                        all_norms.append(module_norm)
+                except:
+                    # Skip problematic modules
+                    continue
+        
+        # Create tensor from scalars
+        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        
+        # Cache the result
+        self._cached_weight_norms = result
+        self._weight_norm_cache_step = getattr(self, '_current_step', 0)
+        
+        return result
+
+    @torch.no_grad()
+    def combined_weight_norms(self) -> torch.Tensor:
+        """Efficiently collect combined weight norms from all modules."""
+        # Use cached values when possible
+        if hasattr(self, '_cached_combined_norms') and self._combined_weight_norm_cache_step == self._current_step:
+            return self._cached_combined_norms
+            
+        # Collect norms efficiently
+        all_norms = []
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if hasattr(lora, "combined_weight_norms") and lora.combined_weight_norms is not None:
+                try:
+                    module_norm = lora.combined_weight_norms.mean().item()
+                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                        all_norms.append(module_norm)
+                except:
+                    # Skip problematic modules
+                    continue
+        
+        # Create tensor from scalars
+        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        
+        # Cache the result
+        self._cached_combined_norms = result
+        self._combined_weight_norm_cache_step = getattr(self, '_current_step', 0)
+        
+        return result

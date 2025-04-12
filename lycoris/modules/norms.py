@@ -4,6 +4,8 @@ import torch.nn as nn
 from .base import LycorisBaseModule
 from ..logging import warning_once
 
+from typing import Optional
+
 
 class NormModule(LycorisBaseModule):
     name = "norm"
@@ -141,7 +143,17 @@ class NormModule(LycorisBaseModule):
 
         kw_dict = self.kw_dict | {"weight": w, "bias": b}
         return self.op(x, **kw_dict)
+    
+    @torch.no_grad()
+    def update_norms(self):
+        return
 
+    @torch.no_grad()
+    def update_grad_norms(self):
+        return
+
+    def init_ggpo(self):
+        return
 
 if __name__ == "__main__":
     base = nn.LayerNorm(128).cuda()

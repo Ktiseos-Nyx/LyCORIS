@@ -7,6 +7,8 @@ import torch.nn as nn
 from .base import LycorisBaseModule
 from ..utils import product
 
+from typing import Optional
+
 
 class DyLoraModule(LycorisBaseModule):
     support_module = {
@@ -34,6 +36,8 @@ class DyLoraModule(LycorisBaseModule):
         bypass_mode=None,
         rs_lora=False,
         train_on_input=False,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         """if alpha == 0 or None, alpha is rank (no scaling)."""
@@ -46,6 +50,8 @@ class DyLoraModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in IA^3 algo.")
