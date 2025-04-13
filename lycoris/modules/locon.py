@@ -369,12 +369,12 @@ class LoConModule(LycorisBaseModule):
         dtype = self.dtype
         
         # Apply lora dropout during weight computation if enabled
-        if self.training and ((self.lora_dropout is not None and self.lora_dropout > 0) or self.tucker or self.rank_dropout):
+        if self.training and ((self.lora_dropout is not None and self.lora_dropout > 0 and not self.wd) or self.tucker or self.rank_dropout):
             # Get the lora weights
             wa = self.lora_up.weight.to(x.device).to(dtype)
             wb = self.lora_down.weight.to(x.device).to(dtype)
             
-            if self.training and self.lora_dropout is not None and self.lora_dropout > 0:
+            if self.training and self.lora_dropout is not None and self.lora_dropout > 0 and not self.wd:
                 # Generate dropout masks
                 up_mask = torch.bernoulli(
                     torch.ones(wa.shape[0], device=x.device) * (1 - self.lora_dropout)
@@ -420,6 +420,20 @@ class LoConModule(LycorisBaseModule):
         if self.wd:
             weight = self.apply_weight_decompose(weight + diff_weight, self.multiplier)
             x = self.dropout(x)
+
+            # Additionally apply lora dropout to input if enabled
+            if self.training and self.lora_dropout is not None and self.lora_dropout > 0:
+                # For weight decomposition, apply the lora dropout directly to input dimensions
+                # This creates a mask for input features that simulates the effect of lora_dropout_down
+                input_mask = torch.bernoulli(
+                    torch.ones(x.shape[-1], device=x.device) * (1 - self.lora_dropout)
+                ).to(x.dtype)
+                
+                # Apply mask to the input - this affects which input features contribute to the output
+                x = x * input_mask
+                
+                # Note: We don't need to simulate lora_dropout_up here because the weight_decompose 
+                # approach already handles the output feature scaling differently
         else:
             weight = weight + diff_weight * self.multiplier
         
