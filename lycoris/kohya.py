@@ -49,6 +49,7 @@ def create_network(
     rank_dropout = float(kwargs.get("rank_dropout", 0.0) or 0.0)
     module_dropout = float(kwargs.get("module_dropout", 0.0) or 0.0)
     lora_dropout = float(kwargs.get("lora_dropout", 0.0) or 0.0)
+    aid_dropout = float(kwargs.get("aid_dropout", 0.0) or 0.0)
     algo = (kwargs.get("algo", "lora") or "lora").lower()
     use_tucker = str_bool(
         not kwargs.get("disable_conv_cp", True)
@@ -107,6 +108,9 @@ def create_network(
     if lora_dropout is not None:
         lora_dropout = float(lora_dropout)
 
+    if aid_dropout is not None:
+        aid_dropout = float(aid_dropout)
+
     preset_str = kwargs.get("preset", "full")
     if preset_str not in PRESET:
         preset = read_preset(preset_str)
@@ -132,6 +136,7 @@ def create_network(
         rank_dropout=rank_dropout,
         module_dropout=module_dropout,
         lora_dropout=lora_dropout,
+        aid_dropout=aid_dropout,
         use_tucker=use_tucker,
         use_scalar=use_scalar,
         network_module=algo,
@@ -316,6 +321,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
+        aid_dropout=0.0,
         network_module: str = "locon",
         norm_modules=NormModule,
         train_norm=False,
@@ -334,6 +340,9 @@ class LycorisNetworkKohya(LycorisNetwork):
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
         self.lora_dropout = kwargs.get("lora_dropout", 0.0)
+        self.aid_dropout = kwargs.get("aid_dropout", 0.0)
+
+        self.wd_on_output = kwargs.get("wd_on_output", False)
 
         if self.ggpo_beta is not None:
             self.ggpo_beta = float(self.ggpo_beta)
@@ -349,6 +358,9 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         if self.lora_dropout is not None:
             self.lora_dropout  = float(self.lora_dropout)
+
+        if self.aid_dropout is not None:
+            self.aid_dropout  = float(self.aid_dropout)
 
         if not self.ENABLE_CONV:
             conv_lora_dim = 0
@@ -371,10 +383,15 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         if 1 >= lora_dropout >= 0:
             logger.info(f"Use LORA Dropout value: {lora_dropout}")
+
+        if 1 >= aid_dropout >= 0:
+            logger.info(f"Use AID Dropout value: {aid_dropout}")
+
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
         self.lora_dropout = lora_dropout
+        self.aid_dropout = aid_dropout
 
         self.use_tucker = use_tucker
 
@@ -400,6 +417,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                     self.rank_dropout,
                     self.module_dropout,
                     self.lora_dropout,
+                    self.aid_dropout,
                     **kwargs,
                 )
             lora = None
@@ -430,6 +448,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                 self.rank_dropout,
                 self.module_dropout,
                 self.lora_dropout,
+                self.aid_dropout,
                 use_tucker,
                 **kwargs,
             )
@@ -722,6 +741,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                 metadata = {}
             model_hash = precalculate_safetensors_hashes(state_dict)
             metadata["sshs_model_hash"] = model_hash
+            metadata["wd_on_output"] = self.wd_on_output
 
             save_file(state_dict, file, metadata)
         else:
@@ -821,3 +841,60 @@ class LycorisNetworkKohya(LycorisNetwork):
         self._combined_weight_norm_cache_step = getattr(self, '_current_step', 0)
         
         return result
+    
+    @torch.no_grad()
+    def accumulate_grad(self):
+        for lora in self.text_encoder_loras + self.unet_loras:
+            lora.accumulate_grad()
+
+    @torch.no_grad()
+    def sum_grads(self):
+        sum_grads = []
+        sum_squared_grads = []
+        count = 0
+        for lora in self.text_encoder_loras + self.unet_loras:
+            if lora.sum_grads is not None:
+                sum_grads.append(lora.sum_grads)
+            if lora.sum_grads is not None:
+                sum_squared_grads.append(lora.sum_squared_grads)
+            count += lora.grad_count
+
+        return (
+            torch.stack(sum_grads) if len(sum_grads) > 0 else torch.tensor([]),
+            torch.stack(sum_squared_grads) if len(sum_squared_grads) > 0 else torch.tensor([]),
+            count
+        )
+
+    @torch.no_grad()
+    def gradient_noise_scale(self):
+        sum_grads, sum_squared_grads, count = self.sum_grads()
+
+        if count == 0:
+            return None, None
+
+        # Calculate mean gradient and mean squared gradient
+        mean_grad = torch.mean(sum_grads / count, dim=0)
+        mean_squared_grad = torch.mean(sum_squared_grads / count, dim=0)
+
+        # Variance = E[X²] - E[X]²
+        variance = mean_squared_grad - mean_grad**2
+
+        # GNS = trace(Σ) / ||μ||²
+        # trace(Σ) = sum of variances = count * variance (for uniform variance assumption)
+        trace_cov = count * variance
+        grad_norm_squared = count * mean_grad**2
+
+        gradient_noise_scale = trace_cov / grad_norm_squared
+        # mean_grad = torch.mean(all_grads, dim=0)
+        #
+        # # Calculate trace of covariance matrix
+        # centered_grads = all_grads - mean_grad
+        # trace_cov = torch.mean(torch.sum(centered_grads**2, dim=0))
+        #
+        # # Calculate norm of mean gradient squared
+        # grad_norm_squared = torch.sum(mean_grad**2)
+        #
+        # # Calculate GNS using provided gradient norm squared
+        # gradient_noise_scale = trace_cov / grad_norm_squared
+
+        return gradient_noise_scale.item(), variance.item()

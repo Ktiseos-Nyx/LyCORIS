@@ -10,6 +10,8 @@ from ..logging import logger
 from typing import Optional
 import math
 
+from ..utils.general import AID
+
 
 class ModuleCustomSD(nn.Module):
     def __init__(self):
@@ -80,6 +82,7 @@ class LycorisBaseModule(ModuleCustomSD):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
+        aid_dropout=0.0,
         rank_dropout_scale=False,
         bypass_mode=None,
         ggpo_beta: Optional[float] = None,
@@ -92,6 +95,9 @@ class LycorisBaseModule(ModuleCustomSD):
         super().__init__()
         self.lora_name = lora_name
         self.not_supported = False
+        self.grad_count = 0
+        self.sum_grads = None
+        self.sum_squared_grads = None
 
         self.module = type(org_module)
         if isinstance(org_module, nn.Linear):
@@ -188,6 +194,7 @@ class LycorisBaseModule(ModuleCustomSD):
         self.rank_dropout_scale = rank_dropout_scale
         self.module_dropout = module_dropout
         self.lora_dropout = lora_dropout
+        self.aid_dropout = aid_dropout
 
         ## Dropout things
         # Since LoKr/LoHa/OFT/BOFT are hard to follow the rank_dropout definition from kohya
@@ -200,6 +207,7 @@ class LycorisBaseModule(ModuleCustomSD):
         self.rank_drop = (
             nn.Identity() if rank_dropout == 0 else nn.Dropout(rank_dropout)
         )
+        self.aid_drop = nn.Identity() if aid_dropout == 0 else AID(dropout_prob=self.aid_dropout)  # AID activation
 
         self.multiplier = multiplier
         self.org_forward = org_module.forward
@@ -588,6 +596,7 @@ class LycorisBaseModule(ModuleCustomSD):
             out_size = self.lora_up.weight.size(0)
             self.grad_norms = torch.ones(out_size, 1, device=self.device) * 0.01
 
+    @torch.no_grad()
     def init_ggpo(self):
         if self.ggpo_beta is not None and self.ggpo_sigma is not None:
             self.combined_weight_norms = None
@@ -596,3 +605,18 @@ class LycorisBaseModule(ModuleCustomSD):
             self.perturbation_norm_factor = 1.0 / math.sqrt(self.org_module[0].weight.shape[0])
             self.initialize_norm_cache(self.org_module[0].weight)
             self.org_module_shape: tuple[int] = self.org_module[0].weight.shape
+
+    @torch.no_grad()
+    def accumulate_grad(self):
+        for param in self.parameters():
+            if param.grad is not None:
+                grad = param.grad.detach().flatten()
+                self.grad_count += grad.numel()
+
+                # Update running sums
+                if self.sum_grads is None:
+                    self.sum_grads = grad.sum()
+                    self.sum_squared_grads = (grad**2).sum()
+                else:
+                    self.sum_grads += grad.sum()
+                    self.sum_squared_grads += (grad**2).sum()

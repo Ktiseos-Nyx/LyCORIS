@@ -50,6 +50,7 @@ class LoConModule(LycorisBaseModule):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
+        aid_dropout=0.0,
         use_tucker=False,
         use_scalar=False,
         rank_dropout_scale=False,
@@ -72,6 +73,7 @@ class LoConModule(LycorisBaseModule):
             rank_dropout,
             module_dropout,
             lora_dropout,
+            aid_dropout,
             rank_dropout_scale,
             bypass_mode,
             ggpo_beta,
@@ -334,6 +336,9 @@ class LoConModule(LycorisBaseModule):
         else:
             up = self.lora_up(mid)
 
+        if self.training and self.aid_dropout is not None and self.aid_dropout > 0:
+            up = self.aid_drop(up)
+
         return self.dropout(up * self.scalar * self.scale * scale)
 
     def bypass_forward(self, x, scale=1):
@@ -441,6 +446,9 @@ class LoConModule(LycorisBaseModule):
         
         # Apply operation with weights
         result = self.op(x, weight, bias, **self.kw_dict)
+
+        if self.training and self.aid_dropout is not None and self.aid_dropout > 0:
+            result = self.aid_drop(result)
         
         # Apply GGPO perturbation if needed
         if apply_ggpo:
