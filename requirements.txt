@@ -1,4 +1,4 @@
-torch==2.5.1+cu124
+torch==2.6.0+cu124
 toml==0.10.2
-einops==0.8.0
-setuptools>=70.0.0 # not directly required, pinned by Snyk to avoid a vulnerability
+einops==0.8.1
+setuptools==78.1.0 # not directly required, pinned by Snyk to avoid a vulnerability

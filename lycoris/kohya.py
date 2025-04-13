@@ -48,6 +48,7 @@ def create_network(
     dropout = float(kwargs.get("dropout", 0.0) or 0.0)
     rank_dropout = float(kwargs.get("rank_dropout", 0.0) or 0.0)
     module_dropout = float(kwargs.get("module_dropout", 0.0) or 0.0)
+    lora_dropout = float(kwargs.get("lora_dropout", 0.0) or 0.0)
     algo = (kwargs.get("algo", "lora") or "lora").lower()
     use_tucker = str_bool(
         not kwargs.get("disable_conv_cp", True)
@@ -56,14 +57,14 @@ def create_network(
         or kwargs.get("use_tucker", False)
     )
     use_scalar = str_bool(kwargs.get("use_scalar", False))
-    block_size = int(kwargs.get("block_size", None) or 4)
+    block_size = int(kwargs.get("block_size", 4) or 4)
     train_norm = str_bool(kwargs.get("train_norm", False))
-    constraint = float(kwargs.get("constraint", None) or 0)
+    constraint = float(kwargs.get("constraint", 0.0) or 0.0)
     rescaled = str_bool(kwargs.get("rescaled", False))
     weight_decompose = str_bool(kwargs.get("dora_wd", False))
     wd_on_output = str_bool(kwargs.get("wd_on_output", False))
     full_matrix = str_bool(kwargs.get("full_matrix", False))
-    bypass_mode = str_bool(kwargs.get("bypass_mode", None))
+    bypass_mode = str_bool(kwargs.get("bypass_mode", False))
     rs_lora = str_bool(kwargs.get("rs_lora", False))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
     train_t5xxl = str_bool(kwargs.get("train_t5xxl", False))
@@ -91,14 +92,20 @@ def create_network(
     if unbalanced_factorization:
         logger.info("Unbalanced factorization for LoKr is enabled")
 
-    if bypass_mode:
-        logger.info("Bypass mode is enabled")
-
     if weight_decompose:
-        logger.info("Weight decomposition is enabled")
+        logger.info("Weight decomposition (DoRA) is enabled")
+
+    if bypass_mode and weight_decompose:
+        bypass_mode = False
+        logger.info("Because weight decomposition (DoRA) is enabled, bypass mode has been disabled")
+    elif bypass_mode:
+        logger.info("Bypass mode is enabled")
 
     if full_matrix:
         logger.info("Full matrix mode for LoKr is enabled")
+
+    if lora_dropout is not None:
+        lora_dropout = float(lora_dropout)
 
     preset_str = kwargs.get("preset", "full")
     if preset_str not in PRESET:
@@ -124,6 +131,7 @@ def create_network(
         dropout=dropout,
         rank_dropout=rank_dropout,
         module_dropout=module_dropout,
+        lora_dropout=lora_dropout,
         use_tucker=use_tucker,
         use_scalar=use_scalar,
         network_module=algo,
@@ -304,9 +312,10 @@ class LycorisNetworkKohya(LycorisNetwork):
         alpha=1,
         conv_alpha=1,
         use_tucker=False,
-        dropout=0,
-        rank_dropout=0,
-        module_dropout=0,
+        dropout=0.0,
+        rank_dropout=0.0,
+        module_dropout=0.0,
+        lora_dropout=0.0,
         network_module: str = "locon",
         norm_modules=NormModule,
         train_norm=False,
@@ -324,6 +333,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
+        self.lora_dropout = kwargs.get("lora_dropout", 0.0)
 
         if self.ggpo_beta is not None:
             self.ggpo_beta = float(self.ggpo_beta)
@@ -336,6 +346,9 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         if self.ggpo_conv_weight_sample_size is not None:
             self.ggpo_conv_weight_sample_size = int(self.ggpo_conv_weight_sample_size)
+
+        if self.lora_dropout is not None:
+            self.lora_dropout  = float(self.lora_dropout)
 
         if not self.ENABLE_CONV:
             conv_lora_dim = 0
@@ -355,9 +368,13 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         if 1 >= dropout >= 0:
             logger.info(f"Use Dropout value: {dropout}")
+
+        if 1 >= lora_dropout >= 0:
+            logger.info(f"Use LORA Dropout value: {lora_dropout}")
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
+        self.lora_dropout = lora_dropout
 
         self.use_tucker = use_tucker
 
@@ -382,6 +399,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                     self.multiplier,
                     self.rank_dropout,
                     self.module_dropout,
+                    self.lora_dropout,
                     **kwargs,
                 )
             lora = None
@@ -411,6 +429,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                 self.dropout,
                 self.rank_dropout,
                 self.module_dropout,
+                self.lora_dropout,
                 use_tucker,
                 **kwargs,
             )

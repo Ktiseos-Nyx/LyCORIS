@@ -79,6 +79,7 @@ class LycorisBaseModule(ModuleCustomSD):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
+        lora_dropout=0.0,
         rank_dropout_scale=False,
         bypass_mode=None,
         ggpo_beta: Optional[float] = None,
@@ -186,6 +187,7 @@ class LycorisBaseModule(ModuleCustomSD):
         self.rank_dropout = rank_dropout
         self.rank_dropout_scale = rank_dropout_scale
         self.module_dropout = module_dropout
+        self.lora_dropout = lora_dropout
 
         ## Dropout things
         # Since LoKr/LoHa/OFT/BOFT are hard to follow the rank_dropout definition from kohya

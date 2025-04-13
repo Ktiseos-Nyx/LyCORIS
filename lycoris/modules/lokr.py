@@ -54,6 +54,7 @@ class LokrModule(LycorisBaseModule):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
+        lora_dropout=0.0,
         use_tucker=False,
         use_scalar=False,
         decompose_both=False,
@@ -76,6 +77,7 @@ class LokrModule(LycorisBaseModule):
             dropout,
             rank_dropout,
             module_dropout,
+            lora_dropout,
             rank_dropout_scale,
             bypass_mode,
             ggpo_beta,
@@ -208,6 +210,7 @@ class LokrModule(LycorisBaseModule):
         self.rank_dropout = rank_dropout
         self.rank_dropout_scale = rank_dropout_scale
         self.module_dropout = module_dropout
+        self.lora_dropout = lora_dropout
 
         if isinstance(alpha, torch.Tensor):
             alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error

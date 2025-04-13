@@ -82,6 +82,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     dropout = float(kwargs.get("dropout", 0.0) or 0.0)
     rank_dropout = float(kwargs.get("rank_dropout", 0.0) or 0.0)
     module_dropout = float(kwargs.get("module_dropout", 0.0) or 0.0)
+    lora_dropout = float(kwargs.get("lora_dropout", 0.0) or 0.0)
     algo = (kwargs.get("algo", "lora") or "lora").lower()
     use_tucker = str_bool(
         not kwargs.get("disable_conv_cp", True)
@@ -97,7 +98,8 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     weight_decompose = str_bool(kwargs.get("dora_wd", False))
     wd_on_output = str_bool(kwargs.get("wd_on_output", False))
     full_matrix = str_bool(kwargs.get("full_matrix", False))
-    bypass_mode = str_bool(kwargs.get("bypass_mode", None))
+    bypass_mode = str_bool(kwargs.get("bypass_mode", False))
+    rs_lora = str_bool(kwargs.get("rs_lora", False))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
 
     ggpo_beta = kwargs.get("ggpo_beta", None)
@@ -129,8 +131,17 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     if weight_decompose:
         logger.info("Weight decomposition is enabled")
 
+    if bypass_mode and weight_decompose:
+        bypass_mode = False
+        logger.info("Because weight decomposition (DoRA) is enabled, bypass mode has been disabled")
+    elif bypass_mode:
+        logger.info("Bypass mode is enabled")
+
     if full_matrix:
         logger.info("Full matrix mode for LoKr is enabled")
+
+    if lora_dropout is not None:
+        lora_dropout = float(lora_dropout)
 
     preset = kwargs.get("preset", "full")
     if preset not in PRESET:
@@ -152,6 +163,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         dropout=dropout,
         rank_dropout=rank_dropout,
         module_dropout=module_dropout,
+        lora_dropout=lora_dropout,
         use_tucker=use_tucker,
         use_scalar=use_scalar,
         network_module=algo,
@@ -165,6 +177,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         wd_on_out=wd_on_output,
         full_matrix=full_matrix,
         bypass_mode=bypass_mode,
+        rs_lora=rs_lora,
         unbalanced_factorization=unbalanced_factorization,
         ggpo_beta=ggpo_beta,
         ggpo_sigma=ggpo_sigma,
@@ -275,9 +288,10 @@ class LycorisNetwork(torch.nn.Module):
         alpha=1,
         conv_alpha=1,
         use_tucker=False,
-        dropout=0,
-        rank_dropout=0,
-        module_dropout=0,
+        dropout=0.0,
+        rank_dropout=0.0,
+        module_dropout=0.0,
+        lora_dropout=0.0,
         network_module: str = "locon",
         norm_modules=NormModule,
         train_norm=False,
@@ -293,6 +307,7 @@ class LycorisNetwork(torch.nn.Module):
         self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
+        self.lora_dropout = kwargs.get("lora_dropout", 0.0)
 
         if self.ggpo_beta is not None:
             self.ggpo_beta = float(self.ggpo_beta)
@@ -306,6 +321,9 @@ class LycorisNetwork(torch.nn.Module):
         if self.ggpo_conv_weight_sample_size is not None:
             self.ggpo_conv_weight_sample_size = int(self.ggpo_conv_weight_sample_size)
 
+        if self.lora_dropout is not None:
+            self.lora_dropout  = float(self.lora_dropout)
+
         if init_only:
             self.multiplier = 1
             self.lora_dim = 0
@@ -315,6 +333,7 @@ class LycorisNetwork(torch.nn.Module):
             self.dropout = 0
             self.rank_dropout = 0
             self.module_dropout = 0
+            self.lora_dropout = 0,
             self.use_tucker = False
             self.loras = []
             self.algo_table = {}
@@ -340,9 +359,13 @@ class LycorisNetwork(torch.nn.Module):
 
         if 1 >= dropout >= 0:
             logger.info(f"Use Dropout value: {dropout}")
+
+        if 1 >= lora_dropout >= 0:
+            logger.info(f"Use LORA Dropout value: {lora_dropout}")
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
+        self.lora_dropout = lora_dropout
 
         self.use_tucker = use_tucker
 
@@ -367,6 +390,7 @@ class LycorisNetwork(torch.nn.Module):
                     self.multiplier,
                     self.rank_dropout,
                     self.module_dropout,
+                    self.lora_dropout,
                     **kwargs,
                 )
             lora = None
@@ -396,6 +420,7 @@ class LycorisNetwork(torch.nn.Module):
                 self.dropout,
                 self.rank_dropout,
                 self.module_dropout,
+                self.lora_dropout,
                 use_tucker,
                 self.ggpo_beta,
                 self.ggpo_sigma,
