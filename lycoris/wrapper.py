@@ -378,6 +378,9 @@ class LycorisNetwork(torch.nn.Module):
         if 1 >= aid_dropout >= 0:
             logger.info(f"Use AID Dropout value: {aid_dropout}")
 
+        if self.wd_on_output is not None:
+            logger.info(f"wd_on_output={self.wd_on_output}")
+
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
