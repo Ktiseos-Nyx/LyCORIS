@@ -744,7 +744,7 @@ class LycorisNetwork(torch.nn.Module):
             if "sshs_model_hash" not in metadata:
                 model_hash = precalculate_safetensors_hashes(state_dict)
                 metadata["sshs_model_hash"] = model_hash
-            metadata["wd_on_output"] = self.wd_on_output
+            metadata["wd_on_output"] = str(self.wd_on_output)
             save_file(state_dict, file, metadata)
         else:
             torch.save(state_dict, file)

@@ -27,7 +27,6 @@ class AID(nn.Module):
     def __init__(self, dropout_prob=0.9):
         super(AID, self).__init__()
         self.p = dropout_prob
-        self.training = True
 
     def forward(self, x):
         if self.training:

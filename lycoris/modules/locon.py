@@ -424,7 +424,6 @@ class LoConModule(LycorisBaseModule):
         
         if self.wd:
             weight = self.apply_weight_decompose(weight + diff_weight, self.multiplier)
-            x = self.dropout(x)
 
             # Additionally apply lora dropout to input if enabled
             if self.training and self.lora_dropout is not None and self.lora_dropout > 0:
@@ -439,6 +438,8 @@ class LoConModule(LycorisBaseModule):
                 
                 # Note: We don't need to simulate lora_dropout_up here because the weight_decompose 
                 # approach already handles the output feature scaling differently
+
+            x = self.dropout(x)
         else:
             weight = weight + diff_weight * self.multiplier
         
