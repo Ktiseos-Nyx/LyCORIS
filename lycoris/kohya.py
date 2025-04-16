@@ -147,7 +147,7 @@ def create_network(
         constraint=constraint,
         rescaled=rescaled,
         weight_decompose=weight_decompose,
-        wd_on_out=wd_on_output,
+        wd_on_output=wd_on_output,
         full_matrix=full_matrix,
         bypass_mode=bypass_mode,
         rs_lora=rs_lora,

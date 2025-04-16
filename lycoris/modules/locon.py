@@ -55,7 +55,7 @@ class LoConModule(LycorisBaseModule):
         use_scalar=False,
         rank_dropout_scale=False,
         weight_decompose=False,
-        wd_on_out=False,
+        wd_on_output=False,
         bypass_mode=None,
         rs_lora=False,
         ggpo_beta: Optional[float] = None,
@@ -121,11 +121,11 @@ class LoConModule(LycorisBaseModule):
             raise NotImplementedError
 
         self.wd = weight_decompose
-        self.wd_on_out = wd_on_out
+        self.wd_on_output = wd_on_output
         if self.wd:
             org_weight = org_module.weight.cpu().clone().float()
             self.dora_norm_dims = org_weight.dim() - 1
-            if self.wd_on_out:
+            if self.wd_on_output:
                 self.dora_scale = nn.Parameter(
                     torch.norm(
                         org_weight.reshape(org_weight.shape[0], -1),
@@ -256,7 +256,7 @@ class LoConModule(LycorisBaseModule):
 
     def apply_weight_decompose(self, weight, multiplier=1):
         weight = weight.to(self.dora_scale.dtype)
-        if self.wd_on_out:
+        if self.wd_on_output:
             weight_norm = (
                 weight.reshape(weight.shape[0], -1)
                 .norm(dim=1)
