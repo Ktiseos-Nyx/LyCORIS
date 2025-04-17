@@ -462,17 +462,21 @@ class LoConModule(LycorisBaseModule):
         return result
 
     def ggpo_pertubation(self, x):
-        # More efficient scale calculation
-        perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
-        perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
-        
         # Optimized perturbation generation based on module type
         if self.module_type == "linear":
+            # More efficient scale calculation
+            perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
+            perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
+            
             # For linear layers, use efficient matrix multiplication
             perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
             perturbation = perturbation * perturbation_scale_factor.view(-1, 1)
             return x @ perturbation.T
         elif self.module_type.startswith("conv") and self.ggpo_conv:
+            # More efficient scale calculation
+            perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
+            perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
+
             # For convolution layers, generate efficient perturbation
             perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
             
