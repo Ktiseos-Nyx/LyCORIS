@@ -408,7 +408,7 @@ class LycorisBaseModule(ModuleCustomSD):
         if self.ggpo_beta is None or self.ggpo_sigma is None or not self.training:
             return
         
-        if self.module_type != "linear" and not self.ggpo_conv:
+        if not(self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)):
             return
         
         # Skip update every other step for convolutions to reduce overhead
@@ -447,7 +447,7 @@ class LycorisBaseModule(ModuleCustomSD):
                 )
             return
         
-        if self.ggpo_conv:
+        if self.module_type.startswith("conv") and self.ggpo_conv:
             # Handle convolution layers - use sampling for efficiency
             try:
                 # Sample-based estimation for convolution layers
@@ -513,7 +513,7 @@ class LycorisBaseModule(ModuleCustomSD):
         if not self.training:
             return
         
-        if self.module_type != "linear" and not self.ggpo_conv:
+        if not(self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)):
             return
             
         # Skip update every other step for convolutions to reduce overhead
@@ -565,36 +565,36 @@ class LycorisBaseModule(ModuleCustomSD):
                 self.grad_norms = torch.ones(out_size, 1, device=self.device) * (grad_scale / out_size)
             return
         
-        # Handle convolution layers with sampling-based approximation
-        try:
-            # Use a fast approximation for convolution gradients
-            out_size = self.lora_up.weight.size(0)
-            
-            # Calculate gradient magnitude using norm products (faster than reconstruction)
-            up_grad_norm = torch.norm(lora_up_grad.view(-1))
-            down_weight_norm = torch.norm(self.lora_down.weight.view(-1))
-            up_weight_norm = torch.norm(self.lora_up.weight.view(-1))
-            down_grad_norm = torch.norm(lora_down_grad.view(-1))
-            
-            # Approximation of the combined gradient magnitude
-            grad_magnitude = self.scale * (up_grad_norm * down_weight_norm + up_weight_norm * down_grad_norm)
-            
-            # Distribute gradient magnitude across output channels
-            # This avoids expensive per-channel calculations while capturing key behavior
-            up_channel_magnitudes = torch.norm(self.lora_up.weight.view(out_size, -1), dim=1, keepdim=True)
-            magnitude_sum = up_channel_magnitudes.sum()
-            
-            if magnitude_sum > 0:
-                # Distribute based on weight magnitudes (channels with larger weights get larger gradients)
-                self.grad_norms = up_channel_magnitudes * (grad_magnitude / magnitude_sum)
-            else:
-                # Fallback to uniform distribution
-                self.grad_norms = torch.ones(out_size, 1, device=self.device) * (grad_magnitude / out_size)
-        except Exception:
-            # Silent fallback
-            logger.warning("update_grad_norms conv fallback")
-            out_size = self.lora_up.weight.size(0)
-            self.grad_norms = torch.ones(out_size, 1, device=self.device) * 0.01
+        if self.module_type.startswith("conv") and self.ggpo_conv:
+            try:
+                # Use a fast approximation for convolution gradients
+                out_size = self.lora_up.weight.size(0)
+                
+                # Calculate gradient magnitude using norm products (faster than reconstruction)
+                up_grad_norm = torch.norm(lora_up_grad.view(-1))
+                down_weight_norm = torch.norm(self.lora_down.weight.view(-1))
+                up_weight_norm = torch.norm(self.lora_up.weight.view(-1))
+                down_grad_norm = torch.norm(lora_down_grad.view(-1))
+                
+                # Approximation of the combined gradient magnitude
+                grad_magnitude = self.scale * (up_grad_norm * down_weight_norm + up_weight_norm * down_grad_norm)
+                
+                # Distribute gradient magnitude across output channels
+                # This avoids expensive per-channel calculations while capturing key behavior
+                up_channel_magnitudes = torch.norm(self.lora_up.weight.view(out_size, -1), dim=1, keepdim=True)
+                magnitude_sum = up_channel_magnitudes.sum()
+                
+                if magnitude_sum > 0:
+                    # Distribute based on weight magnitudes (channels with larger weights get larger gradients)
+                    self.grad_norms = up_channel_magnitudes * (grad_magnitude / magnitude_sum)
+                else:
+                    # Fallback to uniform distribution
+                    self.grad_norms = torch.ones(out_size, 1, device=self.device) * (grad_magnitude / out_size)
+            except Exception:
+                # Silent fallback
+                logger.warning("update_grad_norms conv fallback")
+                out_size = self.lora_up.weight.size(0)
+                self.grad_norms = torch.ones(out_size, 1, device=self.device) * 0.01
 
     @torch.no_grad()
     def init_ggpo(self):

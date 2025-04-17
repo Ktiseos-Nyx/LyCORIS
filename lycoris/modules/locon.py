@@ -472,7 +472,7 @@ class LoConModule(LycorisBaseModule):
             perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
             perturbation = perturbation * perturbation_scale_factor.view(-1, 1)
             return x @ perturbation.T
-        else:
+        elif self.module_type.startswith("conv") and self.ggpo_conv:
             # For convolution layers, generate efficient perturbation
             perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
             
@@ -482,3 +482,5 @@ class LoConModule(LycorisBaseModule):
             
             # Use the appropriate convolution operation
             return self.op(x, perturbation, None, **self.kw_dict)
+        else:
+            return x
