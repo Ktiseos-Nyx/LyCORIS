@@ -49,7 +49,7 @@ def create_network(
     rank_dropout = float(kwargs.get("rank_dropout", 0.0) or 0.0)
     module_dropout = float(kwargs.get("module_dropout", 0.0) or 0.0)
     lora_dropout = float(kwargs.get("lora_dropout", 0.0) or 0.0)
-    aid_dropout = float(kwargs.get("aid_dropout", 0.0) or 0.0)
+    aid_dropout = float(kwargs.get("aid_dropout", None) or None)
     algo = (kwargs.get("algo", "lora") or "lora").lower()
     use_tucker = str_bool(
         not kwargs.get("disable_conv_cp", True)
