@@ -40,7 +40,7 @@ class LohaModule(LycorisBaseModule):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
-        aid_dropout=0.0,
+        aid_dropout=None,
         use_tucker=False,
         use_scalar=False,
         rank_dropout_scale=False,

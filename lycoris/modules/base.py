@@ -82,7 +82,7 @@ class LycorisBaseModule(ModuleCustomSD):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
-        aid_dropout=0.0,
+        aid_dropout=None,
         rank_dropout_scale=False,
         bypass_mode=None,
         ggpo_beta: Optional[float] = None,
@@ -207,7 +207,13 @@ class LycorisBaseModule(ModuleCustomSD):
         self.rank_drop = (
             nn.Identity() if rank_dropout == 0 else nn.Dropout(rank_dropout)
         )
-        self.aid_drop = nn.Identity() if aid_dropout == 0 else AID(dropout_prob=self.aid_dropout)  # AID activation
+
+        aid_applicable = isinstance(org_module, nn.Linear) or self.module_type.startswith("conv") and self.aid_dropout is not None
+
+        self.aid = AID(p=self.aid_dropout) if aid_applicable else nn.Identity() # AID activation
+
+        if aid_applicable:
+            self.register_buffer("aid_p", torch.tensor(self.aid_dropout))
 
         self.multiplier = multiplier
         self.org_forward = org_module.forward

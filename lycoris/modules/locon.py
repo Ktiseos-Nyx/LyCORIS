@@ -50,7 +50,7 @@ class LoConModule(LycorisBaseModule):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
-        aid_dropout=0.0,
+        aid_dropout=None,
         use_tucker=False,
         use_scalar=False,
         rank_dropout_scale=False,
@@ -336,8 +336,8 @@ class LoConModule(LycorisBaseModule):
         else:
             up = self.lora_up(mid)
 
-        if self.training and self.aid_dropout is not None and self.aid_dropout > 0:
-            up = self.aid_drop(up)
+        if self.aid_dropout is not None:
+            up = self.aid(up)
 
         return self.dropout(up * self.scalar * self.scale * scale)
 
@@ -448,8 +448,8 @@ class LoConModule(LycorisBaseModule):
         # Apply operation with weights
         result = self.op(x, weight, bias, **self.kw_dict)
 
-        if self.training and self.aid_dropout is not None and self.aid_dropout > 0:
-            result = self.aid_drop(result)
+        if self.aid_dropout is not None:
+            result = self.aid(result)
         
         # Apply GGPO perturbation if needed
         if apply_ggpo:

@@ -29,7 +29,7 @@ class DyLoraModule(LycorisBaseModule):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
-        aid_dropout=0.0,
+        aid_dropout=None,
         use_tucker=False,
         block_size=4,
         use_scalar=False,
