@@ -84,7 +84,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     rank_dropout = float(kwargs.get("rank_dropout", 0.0) or 0.0)
     module_dropout = float(kwargs.get("module_dropout", 0.0) or 0.0)
     lora_dropout = float(kwargs.get("lora_dropout", None) or None)
-    aid_dropout = float(kwargs.get("aid_dropout", None) or None)
     algo = (kwargs.get("algo", "lora") or "lora").lower()
     use_tucker = str_bool(
         not kwargs.get("disable_conv_cp", True)
@@ -144,9 +143,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
 
     if lora_dropout is not None:
         lora_dropout = float(lora_dropout)
-
-    if aid_dropout is not None:
-        aid_dropout = float(aid_dropout)
 
     preset = kwargs.get("preset", "full")
     if preset not in PRESET:
@@ -297,7 +293,6 @@ class LycorisNetwork(torch.nn.Module):
         rank_dropout=0.0,
         module_dropout=0.0,
         lora_dropout=0.0,
-        aid_dropout=None,
         network_module: str = "locon",
         norm_modules=NormModule,
         train_norm=False,
@@ -314,7 +309,6 @@ class LycorisNetwork(torch.nn.Module):
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
         self.lora_dropout = kwargs.get("lora_dropout", 0.0)
-        self.aid_dropout = kwargs.get("aid_dropout", None)
 
         self.wd_on_output = kwargs.get("wd_on_output", False)
 
@@ -332,9 +326,6 @@ class LycorisNetwork(torch.nn.Module):
 
         if self.lora_dropout is not None:
             self.lora_dropout  = float(self.lora_dropout)
-
-        if self.aid_dropout is not None:
-            self.aid_dropout  = float(self.aid_dropout)
 
         if init_only:
             self.multiplier = 1
@@ -375,9 +366,6 @@ class LycorisNetwork(torch.nn.Module):
         if 1 >= lora_dropout >= 0:
             logger.info(f"Use LORA Dropout value: {lora_dropout}")
 
-        if self.aid_dropout is not None and 1 >= self.aid_dropout >= 0:
-            logger.info(f"Use AID Dropout value: {self.aid_dropout}")
-
         if self.wd_on_output is not None:
             logger.info(f"wd_on_output={self.wd_on_output}")
 
@@ -385,7 +373,6 @@ class LycorisNetwork(torch.nn.Module):
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
         self.lora_dropout = lora_dropout
-        self.aid_dropout = aid_dropout
 
         self.use_tucker = use_tucker
 
@@ -405,11 +392,12 @@ class LycorisNetwork(torch.nn.Module):
 
             if train_norm and "Norm" in module.__class__.__name__:
                 return norm_modules(
-                    lora_name,
-                    module,
-                    self.multiplier,
-                    self.rank_dropout,
-                    self.module_dropout,
+                    lora_name=lora_name,
+                    module=module,
+                    multiplier=self.multiplier,
+                    rank_dropout=self.rank_dropout,
+                    module_dropout=self.module_dropout,
+                    lora_dropout=0.0,
                     **kwargs,
                 )
             lora = None
@@ -440,7 +428,6 @@ class LycorisNetwork(torch.nn.Module):
                 self.rank_dropout,
                 self.module_dropout,
                 self.lora_dropout,
-                self.aid_dropout,
                 use_tucker,
                 self.ggpo_beta,
                 self.ggpo_sigma,
