@@ -401,7 +401,7 @@ class LycorisNetworkKohya(LycorisNetwork):
             if train_norm and "Norm" in module.__class__.__name__:
                 return norm_modules(
                     lora_name=lora_name,
-                    module=module,
+                    org_module=module,
                     multiplier=self.multiplier,
                     rank_dropout=self.rank_dropout,
                     module_dropout=self.module_dropout,
