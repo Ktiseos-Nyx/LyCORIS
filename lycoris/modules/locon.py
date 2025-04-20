@@ -350,7 +350,7 @@ class LoConModule(LycorisBaseModule):
                     self.ggpo_beta is not None and 
                     self.combined_weight_norms is not None and 
                     self.grad_norms is not None and
-                    (self.module_type == "linear" or self.ggpo_conv))
+                    (self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)))
         
         # Handle bypass mode first - simpler path
         if self.bypass_mode:
@@ -359,9 +359,10 @@ class LoConModule(LycorisBaseModule):
             if apply_ggpo:
                 with torch.no_grad():
                     perturbation_output = self.ggpo_pertubation(x)
-                    
-                # Add perturbation to result and return
-                result = result + perturbation_output
+                
+                if perturbation_output is not None:
+                    # Add perturbation to result and return
+                    result = result + perturbation_output
                     
             return result
         
@@ -448,6 +449,10 @@ class LoConModule(LycorisBaseModule):
             with torch.no_grad():
                 perturbation_output = self.ggpo_pertubation(x)
                 
+                if perturbation_output is not None:
+                    # Add perturbation to result and return
+                    result = result + perturbation_output
+                
             # Add perturbation to result
             result = result + perturbation_output
         
@@ -479,4 +484,4 @@ class LoConModule(LycorisBaseModule):
             # Use the appropriate convolution operation
             return self.op(x, perturbation, None, **self.kw_dict)
         else:
-            return x
+            return None
