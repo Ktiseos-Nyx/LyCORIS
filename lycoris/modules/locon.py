@@ -449,9 +449,9 @@ class LoConModule(LycorisBaseModule):
             with torch.no_grad():
                 perturbation_output = self.ggpo_pertubation(x)
                 
-                if perturbation_output is not None:
-                    # Add perturbation to result and return
-                    result = result + perturbation_output
+            if perturbation_output is not None:
+                # Add perturbation to result and return
+                result = result + perturbation_output
                 
             # Add perturbation to result
             result = result + perturbation_output
