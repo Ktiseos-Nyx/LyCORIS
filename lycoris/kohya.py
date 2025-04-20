@@ -3,7 +3,7 @@ import fnmatch
 import re
 import logging
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict
 
 import numpy as np
 
@@ -29,6 +29,9 @@ from .config import PRESET
 from .utils.preset import read_preset
 from .utils import str_bool
 from .logging import logger
+import warnings
+
+from collections import defaultdict
 
 
 def create_network(
@@ -684,29 +687,117 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         return unscaled_norms, scaled_norms
 
-    def prepare_optimizer_params(self, text_encoder_lr, unet_lr, learning_rate):
-        def enumerate_params(loras):
-            params = []
-            for lora in loras:
-                params.extend(lora.parameters())
-            return params
+    def prepare_optimizer_params(self,
+                                     text_encoder_lr: Optional[float] = None,
+                                     unet_lr: Optional[float] = None,
+                                     learning_rate: Optional[float] = None,
+                                     apply_orthograd: bool = False,
+                                     orthograd_targets: List[str] = [],
+                                     ) -> List[Dict[str, Any]]:
+        """
+        Prepares parameter groups for the optimizer, grouping by major component
+        (UNet, TE1, TE2, ...) parsed from parameter names and optionally
+        splitting based on OrthoGrad targets.
 
-        self.requires_grad_(True)
-        all_params = []
+        Args:
+            text_encoder_lr: Learning rate for ALL text encoder LoRA parameters.
+                             If different LRs per TE are needed, this logic
+                             would need adjustment (e.g., pass a dict/list).
+            unet_lr: Learning rate for UNet LoRA parameters.
+            apply_orthograd: If True, split parameters within each major component
+                             into two groups based on orthograd_targets. One group
+                             will have {'orthograd': True}, the other {'orthograd': False}.
+                             If False, each component gets one group {'orthograd': False}.
+            orthograd_targets: A list of strings. Parameter names containing any
+                               of these strings will be assigned to the
+                               'orthograd': True group if apply_orthograd is True.
+                               Usually targets weights like '.lora_down.weight', '.lora_up.weight'.
 
-        if self.text_encoder_loras:
-            param_data = {"params": enumerate_params(self.text_encoder_loras)}
-            if text_encoder_lr is not None:
-                param_data["lr"] = torch.tensor(text_encoder_lr)
-            all_params.append(param_data)
+        Returns:
+            A list of parameter group dictionaries suitable for a PyTorch optimizer.
+        """
+        self.requires_grad_(True) # Ensure grads are enabled
 
-        if self.unet_loras:
-            param_data = {"params": enumerate_params(self.unet_loras)}
-            if unet_lr is not None:
-                param_data["lr"] = torch.tensor(unet_lr)
-            all_params.append(param_data)
+        # Temporary storage: key=(component_type, component_index, is_ortho_target)
+        # component_type = 'unet' or 'te'
+        # component_index = 0 for unet, 1, 2, ... for te
+        # is_ortho_target = True or False
+        grouped_params = defaultdict(list)
 
-        return all_params
+        # Regex to find 'te' followed by digits
+        te_regex = re.compile(r'lora_te(\d+)_')
+
+        # Iterate through all named parameters of the model
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            comp_type = 'unet' # Default to unet
+            comp_idx = 0       # Default index for unet
+
+            # Check if the name matches the text encoder pattern
+            match = te_regex.search(name)
+            if match:
+                comp_type = 'te'
+                comp_idx = int(match.group(1)) # Extract the number (e.g., 1 from 'te1')
+            # else: Parameter remains classified as 'unet', comp_idx 0
+
+            # Determine if this parameter name contains any of the target strings
+            is_target = any(target in name for target in orthograd_targets)
+
+            # Determine if this parameter should go into the OrthoGrad=True group
+            is_ortho_group = apply_orthograd and is_target
+
+            # Assign the parameter to the correct temporary list
+            group_key = (comp_type, comp_idx, is_ortho_group)
+            grouped_params[group_key].append(param)
+
+        # --- Construct Final Parameter Groups ---
+        all_param_groups = []
+        for (comp_type, comp_idx, is_ortho_group), params in grouped_params.items():
+            if not params: # Skip if no parameters fall into this group
+                continue
+
+            # Determine Learning Rate for this group
+            current_lr = None
+            if comp_type == 'unet':
+                current_lr = unet_lr
+            elif comp_type == 'te':
+                # Using the single text_encoder_lr for all TEs
+                current_lr = text_encoder_lr
+                # If per-TE LRs were needed, you'd modify this, e.g.:
+                # if isinstance(text_encoder_lr, dict):
+                #    current_lr = text_encoder_lr.get(comp_idx, default_te_lr)
+                # elif isinstance(text_encoder_lr, list) and comp_idx-1 < len(text_encoder_lr):
+                #     current_lr = text_encoder_lr[comp_idx-1] # If 1-based index in list
+
+            group_dict = {
+                'params': params,
+                'orthograd': is_ortho_group # Set the flag for the optimizer
+            }
+            if current_lr is not None:
+                group_dict['lr'] = current_lr
+
+            # Optional: Add a name for easier debugging
+            group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'te' else ''}"
+            group_name = f"{group_name_prefix}_Ortho" if is_ortho_group else f"{group_name_prefix}_NonOrtho"
+            group_dict['name'] = group_name # Add name to group
+
+            all_param_groups.append(group_dict)
+
+        print(f"Created {len(all_param_groups)} parameter groups:")
+        # Sort groups for consistent print order (optional)
+        all_param_groups.sort(key=lambda g: g.get('name', ''))
+        for i, group in enumerate(all_param_groups):
+             print(f"  Group {i} ('{group.get('name', 'Unnamed')}'): "
+                   f"OrthoGrad={group.get('orthograd', 'N/A')}, "
+                   f"LR={group.get('lr', 'Default')}, "
+                   f"NumParams={len(group['params'])}")
+
+        if not all_param_groups:
+             print("Warning: No parameter groups were created. Check model parameters and targets.")
+
+        return all_param_groups
 
     def save_weights(self, file, dtype, metadata):
         if metadata is not None and len(metadata) == 0:
