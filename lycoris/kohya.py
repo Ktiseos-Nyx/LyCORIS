@@ -3,7 +3,8 @@ import fnmatch
 import re
 import logging
 
-from typing import Any, List, Optional, Dict
+from typing import Any, List, Optional, Dict, Tuple
+import numbers
 
 import numpy as np
 
@@ -688,7 +689,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         return unscaled_norms, scaled_norms
 
     def prepare_optimizer_params(self,
-                                     text_encoder_lr: Optional[float] = None,
+                                     text_encoder_lr: Optional[float|int|List[float]|Tuple[float]] = None,
                                      unet_lr: Optional[float] = None,
                                      learning_rate: Optional[float] = None,
                                      apply_orthograd: bool = False,
@@ -704,6 +705,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                              If different LRs per TE are needed, this logic
                              would need adjustment (e.g., pass a dict/list).
             unet_lr: Learning rate for UNet LoRA parameters.
+            learning_rate: Fallback LR if none present.
             apply_orthograd: If True, split parameters within each major component
                              into two groups based on orthograd_targets. One group
                              will have {'orthograd': True}, the other {'orthograd': False}.
@@ -716,6 +718,8 @@ class LycorisNetworkKohya(LycorisNetwork):
         Returns:
             A list of parameter group dictionaries suitable for a PyTorch optimizer.
         """
+        found_te_ids = set()
+
         self.requires_grad_(True) # Ensure grads are enabled
 
         # Temporary storage: key=(component_type, component_index, is_ortho_target)
@@ -740,6 +744,7 @@ class LycorisNetworkKohya(LycorisNetwork):
             if match:
                 comp_type = 'te'
                 comp_idx = int(match.group(1)) # Extract the number (e.g., 1 from 'te1')
+                found_te_ids.add(comp_idx)
             # else: Parameter remains classified as 'unet', comp_idx 0
 
             # Determine if this parameter name contains any of the target strings
@@ -752,6 +757,25 @@ class LycorisNetworkKohya(LycorisNetwork):
             group_key = (comp_type, comp_idx, is_ortho_group)
             grouped_params[group_key].append(param)
 
+        
+        num_of_te = len(found_te_ids)
+
+        # make sure text_encoder_lr as list of two elements
+        # if float, use the same value for both text encoders
+        # Condition 1: None or empty list/tuple
+        if text_encoder_lr is None or (isinstance(text_encoder_lr, (list, tuple)) and len(text_encoder_lr) == 0):
+            text_encoder_lr = [learning_rate] * num_of_te
+
+        # Condition 2: Single number (int or float)
+        elif isinstance(text_encoder_lr, numbers.Number): # Check if it's a number (int, float, etc.)
+            text_encoder_lr = [float(text_encoder_lr)] * num_of_te # Ensure float values
+
+        # Condition 3: List or tuple, and its length is less than num_of_te
+        elif isinstance(text_encoder_lr, (list, tuple)) and len(text_encoder_lr) < num_of_te:
+            # Convert to list (if it was a tuple) and pad
+            padding_needed = num_of_te - len(text_encoder_lr)
+            text_encoder_lr = list(text_encoder_lr) + [learning_rate] * padding_needed
+
         # --- Construct Final Parameter Groups ---
         all_param_groups = []
         for (comp_type, comp_idx, is_ortho_group), params in grouped_params.items():
@@ -761,15 +785,9 @@ class LycorisNetworkKohya(LycorisNetwork):
             # Determine Learning Rate for this group
             current_lr = None
             if comp_type == 'unet':
-                current_lr = unet_lr
+                current_lr = unet_lr if unet_lr is not None else learning_rate
             elif comp_type == 'te':
-                # Using the single text_encoder_lr for all TEs
-                current_lr = text_encoder_lr
-                # If per-TE LRs were needed, you'd modify this, e.g.:
-                # if isinstance(text_encoder_lr, dict):
-                #    current_lr = text_encoder_lr.get(comp_idx, default_te_lr)
-                # elif isinstance(text_encoder_lr, list) and comp_idx-1 < len(text_encoder_lr):
-                #     current_lr = text_encoder_lr[comp_idx-1] # If 1-based index in list
+                current_lr = text_encoder_lr[comp_idx - 1]
 
             group_dict = {
                 'params': params,
@@ -778,10 +796,9 @@ class LycorisNetworkKohya(LycorisNetwork):
             if current_lr is not None:
                 group_dict['lr'] = torch.tensor(current_lr)
 
-            # Optional: Add a name for easier debugging
             group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'te' else ''}"
             group_name = f"{group_name_prefix}_Ortho" if is_ortho_group else f"{group_name_prefix}_NonOrtho"
-            group_dict['name'] = group_name # Add name to group
+            group_dict['name'] = group_name
 
             all_param_groups.append(group_dict)
 
