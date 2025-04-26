@@ -776,7 +776,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                 'orthograd': is_ortho_group # Set the flag for the optimizer
             }
             if current_lr is not None:
-                group_dict['lr'] = current_lr
+                group_dict['lr'] = torch.tensor(current_lr)
 
             # Optional: Add a name for easier debugging
             group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'te' else ''}"
