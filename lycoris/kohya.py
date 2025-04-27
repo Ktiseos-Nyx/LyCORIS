@@ -66,7 +66,7 @@ def create_network(
     constraint = float(kwargs.get("constraint", 0.0) or 0.0)
     rescaled = str_bool(kwargs.get("rescaled", False))
     weight_decompose = str_bool(kwargs.get("dora_wd", False))
-    wd_on_output = str_bool(kwargs.get("wd_on_output", False))
+    wd_on_output = str_bool(kwargs.get("wd_on_output", True))
     full_matrix = str_bool(kwargs.get("full_matrix", False))
     bypass_mode = str_bool(kwargs.get("bypass_mode", False))
     rs_lora = str_bool(kwargs.get("rs_lora", False))
@@ -92,6 +92,22 @@ def create_network(
 
     if ggpo_beta is not None and ggpo_sigma is not None:
         logger.info(f"LoRA-GGPO training sigma: {ggpo_sigma} beta: {ggpo_beta}")
+    # lora_plus
+    loraplus_lr_ratio = (
+        float(kwargs.get("loraplus_lr_ratio", None))
+        if kwargs.get("loraplus_lr_ratio", None) is not None
+        else None
+    )
+    loraplus_unet_lr_ratio = (
+        float(kwargs.get("loraplus_unet_lr_ratio", None))
+        if kwargs.get("loraplus_unet_lr_ratio", None) is not None
+        else None
+    )
+    loraplus_text_encoder_lr_ratio = (
+        float(kwargs.get("loraplus_text_encoder_lr_ratio", None))
+        if kwargs.get("loraplus_text_encoder_lr_ratio", None) is not None
+        else None
+    )
 
     if unbalanced_factorization:
         logger.info("Unbalanced factorization for LoKr is enabled")
@@ -157,6 +173,14 @@ def create_network(
         ggpo_conv=ggpo_conv,
         ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
     )
+    if (
+        loraplus_lr_ratio is not None
+        or loraplus_unet_lr_ratio is not None
+        or loraplus_text_encoder_lr_ratio is not None
+    ):
+        network.set_loraplus_lr_ratio(
+            loraplus_lr_ratio, loraplus_unet_lr_ratio, loraplus_text_encoder_lr_ratio
+        )
 
     return network
 
@@ -197,22 +221,23 @@ def create_network_from_weights(
         if lora_name in unet_loras:
             unet_loras[lora_name] = modules
 
-    if isinstance(text_encoder, list):
-        text_encoders = text_encoder
-        use_index = True
-    else:
-        text_encoders = [text_encoder]
-        use_index = False
-
-    for idx, te in enumerate(text_encoders):
-        if use_index:
-            prefix = f"{LycorisNetworkKohya.LORA_PREFIX_TEXT_ENCODER}{idx+1}"
+    if text_encoder:
+        if isinstance(text_encoder, list):
+            text_encoders = text_encoder
+            use_index = True
         else:
-            prefix = LycorisNetworkKohya.LORA_PREFIX_TEXT_ENCODER
-        for name, modules in te.named_modules():
-            lora_name = f"{prefix}_{name}".replace(".", "_")
-            if lora_name in te_loras:
-                te_loras[lora_name] = modules
+            text_encoders = [text_encoder]
+            use_index = False
+
+        for idx, te in enumerate(text_encoders):
+            if use_index:
+                prefix = f"{LycorisNetworkKohya.LORA_PREFIX_TEXT_ENCODER}{idx+1}"
+            else:
+                prefix = LycorisNetworkKohya.LORA_PREFIX_TEXT_ENCODER
+            for name, modules in te.named_modules():
+                lora_name = f"{prefix}_{name}".replace(".", "_")
+                if lora_name in te_loras:
+                    te_loras[lora_name] = modules
 
     original_level = logger.level
     logger.setLevel(logging.ERROR)
@@ -232,14 +257,16 @@ def create_network_from_weights(
     logger.info(f"{len(network.unet_loras)} Modules Loaded")
 
     logger.info("Loading TE Modules from state dict...")
-    for lora_name, orig_modules in te_loras.items():
-        if orig_modules is None:
-            continue
-        lyco_type, params = get_module(weights_sd, lora_name)
-        module = make_module(lyco_type, params, lora_name, orig_modules)
-        if module is not None:
-            network.text_encoder_loras.append(module)
-    logger.info(f"{len(network.text_encoder_loras)} Modules Loaded")
+
+    if text_encoder:
+        for lora_name, orig_modules in te_loras.items():
+            if orig_modules is None:
+                continue
+            lyco_type, params = get_module(weights_sd, lora_name)
+            module = make_module(lyco_type, params, lora_name, orig_modules)
+            if module is not None:
+                network.text_encoder_loras.append(module)
+        logger.info(f"{len(network.text_encoder_loras)} Modules Loaded")
 
     for lora in network.unet_loras + network.text_encoder_loras:
         lora.multiplier = multiplier
@@ -263,6 +290,11 @@ class LycorisNetworkKohya(LycorisNetwork):
         "DoubleStreamBlock",
         "SingleStreamBlock",
         "SingleDiTBlock",
+        "MMDoubleStreamBlock",  # HunYuanVideo
+        "MMSingleStreamBlock",  # HunYuanVideo
+        "WanAttentionBlock", # Wan
+        "HunyuanVideoTransformerBlock", # FramePack
+        "HunyuanVideoSingleTransformerBlock", # FramePack
     ]
     UNET_TARGET_REPLACE_NAME = [
         "conv_in",
@@ -355,6 +387,11 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         if self.lora_dropout is not None:
             self.lora_dropout  = float(self.lora_dropout)
+
+        # 初始化LoRA+相关属性
+        self.loraplus_lr_ratio = None
+        self.loraplus_unet_lr_ratio = None
+        self.loraplus_text_encoder_lr_ratio = None
 
         if not self.ENABLE_CONV:
             conv_lora_dim = 0
@@ -535,27 +572,28 @@ class LycorisNetworkKohya(LycorisNetwork):
             ]
             LycorisNetworkKohya.UNET_TARGET_REPLACE_NAME = []
 
-        if isinstance(text_encoder, list):
-            text_encoders = text_encoder
-            use_index = True
-        else:
-            text_encoders = [text_encoder]
-            use_index = False
-
         self.text_encoder_loras = []
-        for i, te in enumerate(text_encoders):
-            self.text_encoder_loras.extend(
-                create_modules(
-                    LycorisNetworkKohya.LORA_PREFIX_TEXT_ENCODER
-                    + (f"{i+1}" if use_index else ""),
-                    te,
-                    LycorisNetworkKohya.TEXT_ENCODER_TARGET_REPLACE_MODULE,
-                    LycorisNetworkKohya.TEXT_ENCODER_TARGET_REPLACE_NAME,
+        if text_encoder:
+            if isinstance(text_encoder, list):
+                text_encoders = text_encoder
+                use_index = True
+            else:
+                text_encoders = [text_encoder]
+                use_index = False
+
+            for i, te in enumerate(text_encoders):
+                self.text_encoder_loras.extend(
+                    create_modules(
+                        LycorisNetworkKohya.LORA_PREFIX_TEXT_ENCODER
+                        + (f"{i+1}" if use_index else ""),
+                        te,
+                        LycorisNetworkKohya.TEXT_ENCODER_TARGET_REPLACE_MODULE,
+                        LycorisNetworkKohya.TEXT_ENCODER_TARGET_REPLACE_NAME,
+                    )
                 )
+            logger.info(
+                f"create LyCORIS for Text Encoder: {len(self.text_encoder_loras)} modules."
             )
-        logger.info(
-            f"create LyCORIS for Text Encoder: {len(self.text_encoder_loras)} modules."
-        )
 
         self.unet_loras = create_modules(
             LycorisNetworkKohya.LORA_PREFIX_UNET,
@@ -688,6 +726,20 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         return unscaled_norms, scaled_norms
 
+    def set_loraplus_lr_ratio(
+        self, loraplus_lr_ratio, loraplus_unet_lr_ratio, loraplus_text_encoder_lr_ratio
+    ):
+        self.loraplus_lr_ratio = loraplus_lr_ratio
+        self.loraplus_unet_lr_ratio = loraplus_unet_lr_ratio
+        self.loraplus_text_encoder_lr_ratio = loraplus_text_encoder_lr_ratio
+
+        logger.info(
+            f"LoRA+ UNet LR Ratio: {self.loraplus_unet_lr_ratio or self.loraplus_lr_ratio}"
+        )
+        logger.info(
+            f"LoRA+ Text Encoder LR Ratio: {self.loraplus_text_encoder_lr_ratio or self.loraplus_lr_ratio}"
+        )
+
     def prepare_optimizer_params(self,
                                      text_encoder_lr: Optional[float|int|List[float]|Tuple[float]] = None,
                                      unet_lr: Optional[float] = None,
@@ -733,8 +785,6 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         # Iterate through all named parameters of the model
         for name, param in self.named_parameters():
-            if not param.requires_grad:
-                continue
 
             comp_type = 'unet' # Default to unet
             comp_idx = 0       # Default index for unet
@@ -742,7 +792,7 @@ class LycorisNetworkKohya(LycorisNetwork):
             # Check if the name matches the text encoder pattern
             match = te_regex.search(name)
             if match:
-                comp_type = 'te'
+                comp_type = 'textencoder'
                 comp_idx = int(match.group(1)) # Extract the number (e.g., 1 from 'te1')
                 found_te_ids.add(comp_idx)
             # else: Parameter remains classified as 'unet', comp_idx 0
@@ -753,9 +803,15 @@ class LycorisNetworkKohya(LycorisNetwork):
             # Determine if this parameter should go into the OrthoGrad=True group
             is_ortho_group = apply_orthograd and is_target
 
+            is_lora_plus = ('lora_up' in name and
+                            ((comp_type == 'textencoder' and self.loraplus_text_encoder_lr_ratio or self.loraplus_lr_ratio) or 
+                             (comp_type == 'unet' and self.loraplus_unet_lr_ratio or self.loraplus_lr_ratio)))
+
+            description = f'{comp_type}{comp_idx}{" plus" if is_lora_plus == "plus" else ""}' + 
+
             # Assign the parameter to the correct temporary list
             group_key = (comp_type, comp_idx, is_ortho_group)
-            grouped_params[group_key].append(param)
+            grouped_params[group_key].append(tuple(param, description, is_lora_plus))
 
         
         num_of_te = len(found_te_ids)
@@ -778,18 +834,22 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         # --- Construct Final Parameter Groups ---
         all_param_groups = []
-        for (comp_type, comp_idx, is_ortho_group), params in grouped_params.items():
-            if not params: # Skip if no parameters fall into this group
-                continue
-
+        lr_descriptions = []
+        for (comp_type, comp_idx, is_ortho_group), (params, descriptions) in grouped_params.items():
             # Determine Learning Rate for this group
             current_lr = None
             if comp_type == 'unet':
-                current_lr = unet_lr if unet_lr is not None else learning_rate
-            elif comp_type == 'te':
-                current_lr = text_encoder_lr[comp_idx - 1]
+                if is_lora_plus:
+                    current_lr = (unet_lr if unet_lr is not None else learning_rate) * self.loraplus_unet_lr_ratio or self.loraplus_lr_ratio
+                else:
+                    current_lr = unet_lr if unet_lr is not None else learning_rate
+            elif comp_type == 'textencoder':
+                if is_lora_plus:
+                    current_lr = text_encoder_lr[comp_idx - 1] * self.loraplus_text_encoder_lr_ratio or self.loraplus_lr_ratio
+                else:
+                    current_lr = text_encoder_lr[comp_idx - 1]
                 
-            group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'te' else ''}"
+            group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'textencoder' else ''}"
             if current_lr is None or current_lr <= 0.0:
                 # We won't train groups that lack a LR or have a lr <= 0.0
                 logger.warning(f"Not training {group_name_prefix} as LR is {str(current_lr)}.")
@@ -797,6 +857,7 @@ class LycorisNetworkKohya(LycorisNetwork):
 
             group_dict = {
                 'params': params,
+                'descriptions': descriptions,
                 'orthograd': is_ortho_group # Set the flag for the optimizer
             }
             group_dict['lr'] = torch.tensor(current_lr)
@@ -805,6 +866,7 @@ class LycorisNetworkKohya(LycorisNetwork):
             group_name = f"{group_name_prefix}_Ortho" if is_ortho_group else f"{group_name_prefix}_NonOrtho"
             group_dict['name'] = group_name
             all_param_groups.append(group_dict)
+            lr_descriptions.append(descriptions)
 
         logger.info(f"Training the following {len(all_param_groups)} parameter groups:")
         # Sort groups for consistent print order (optional)
@@ -818,7 +880,23 @@ class LycorisNetworkKohya(LycorisNetwork):
         if not all_param_groups:
              raise Exception("No parameter groups were created. Check model parameters and targets.")
 
-        return all_param_groups
+        return all_param_groups, lr_descriptions
+
+    def enable_gradient_checkpointing(self):
+        # not supported
+        pass
+
+    def prepare_grad_etc(self, *args):
+        self.requires_grad_(True)
+
+    def on_epoch_start(self, *args):
+        self.train()
+
+    def on_step_start(self, *args):
+        pass
+
+    def get_trainable_params(self):
+        return self.parameters()
 
     def save_weights(self, file, dtype, metadata):
         if metadata is not None and len(metadata) == 0:
