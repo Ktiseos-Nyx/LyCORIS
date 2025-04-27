@@ -789,8 +789,10 @@ class LycorisNetworkKohya(LycorisNetwork):
             elif comp_type == 'te':
                 current_lr = text_encoder_lr[comp_idx - 1]
                 
+            group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'te' else ''}"
             if current_lr is None or current_lr <= 0.0:
                 # We won't train groups that lack a LR or have a lr <= 0.0
+                logger.warning(f"Not training {group_name_prefix} as LR is {str(current_lr)}.")
                 continue
 
             group_dict = {
@@ -799,23 +801,22 @@ class LycorisNetworkKohya(LycorisNetwork):
             }
             group_dict['lr'] = torch.tensor(current_lr)
 
-            group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'te' else ''}"
+
             group_name = f"{group_name_prefix}_Ortho" if is_ortho_group else f"{group_name_prefix}_NonOrtho"
             group_dict['name'] = group_name
-
             all_param_groups.append(group_dict)
 
-        print(f"Created {len(all_param_groups)} parameter groups:")
+        logger.info(f"Training the following {len(all_param_groups)} parameter groups:")
         # Sort groups for consistent print order (optional)
         all_param_groups.sort(key=lambda g: g.get('name', ''))
         for i, group in enumerate(all_param_groups):
-             print(f"  Group {i} ('{group.get('name', 'Unnamed')}'): "
+             logger.info(f"  Group {i} ('{group.get('name', 'Unnamed')}'): "
                    f"OrthoGrad={group.get('orthograd', 'N/A')}, "
                    f"LR={group.get('lr', 'Default')}, "
                    f"NumParams={len(group['params'])}")
 
         if not all_param_groups:
-             print("Warning: No parameter groups were created. Check model parameters and targets.")
+             raise Exception("No parameter groups were created. Check model parameters and targets.")
 
         return all_param_groups
 
