@@ -789,16 +789,15 @@ class LycorisNetworkKohya(LycorisNetwork):
             elif comp_type == 'te':
                 current_lr = text_encoder_lr[comp_idx - 1]
                 
-            if current_lr <= 0.0:
-                # We won't train groups that have a lr <= 0.0
+            if current_lr is None or current_lr <= 0.0:
+                # We won't train groups that lack a LR or have a lr <= 0.0
                 continue
 
             group_dict = {
                 'params': params,
                 'orthograd': is_ortho_group # Set the flag for the optimizer
             }
-            if current_lr is not None:
-                group_dict['lr'] = torch.tensor(current_lr)
+            group_dict['lr'] = torch.tensor(current_lr)
 
             group_name_prefix = f"{comp_type}{comp_idx if comp_type == 'te' else ''}"
             group_name = f"{group_name_prefix}_Ortho" if is_ortho_group else f"{group_name_prefix}_NonOrtho"
