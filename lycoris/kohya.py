@@ -788,6 +788,10 @@ class LycorisNetworkKohya(LycorisNetwork):
                 current_lr = unet_lr if unet_lr is not None else learning_rate
             elif comp_type == 'te':
                 current_lr = text_encoder_lr[comp_idx - 1]
+                
+            if current_lr <= 0.0:
+                # We won't train groups that have a lr <= 0.0
+                continue
 
             group_dict = {
                 'params': params,
