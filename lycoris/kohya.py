@@ -785,7 +785,6 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         # Iterate through all named parameters of the model
         for name, param in self.named_parameters():
-
             comp_type = 'unet' # Default to unet
             comp_idx = 0       # Default index for unet
 
@@ -803,15 +802,15 @@ class LycorisNetworkKohya(LycorisNetwork):
             # Determine if this parameter should go into the OrthoGrad=True group
             is_ortho_group = apply_orthograd and is_target
 
-            is_lora_plus = ('lora_up' in name and
-                            ((comp_type == 'textencoder' and self.loraplus_text_encoder_lr_ratio or self.loraplus_lr_ratio) or 
-                             (comp_type == 'unet' and self.loraplus_unet_lr_ratio or self.loraplus_lr_ratio)))
+            is_lora_plus = (name is not None and 'lora_up' in name and
+                            ((comp_type == 'textencoder' and (self.loraplus_text_encoder_lr_ratio is not None or self.loraplus_lr_ratio is not None)) or 
+                             (comp_type == 'unet' and (self.loraplus_unet_lr_ratio is not None or self.loraplus_lr_ratio is not None))))
 
-            description = f'{comp_type}{comp_idx}{" plus" if is_lora_plus == "plus" else ""}' + 
+            lr_description = f"{comp_type}{comp_idx if comp_type == 'textencoder' else ''}{' plus' if is_lora_plus else ''}"
 
             # Assign the parameter to the correct temporary list
-            group_key = (comp_type, comp_idx, is_ortho_group)
-            grouped_params[group_key].append(tuple(param, description, is_lora_plus))
+            group_key = (comp_type, comp_idx, is_ortho_group, is_lora_plus)
+            grouped_params[group_key].append((param, lr_description))
 
         
         num_of_te = len(found_te_ids)
@@ -834,8 +833,9 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         # --- Construct Final Parameter Groups ---
         all_param_groups = []
-        lr_descriptions = []
-        for (comp_type, comp_idx, is_ortho_group), (params, descriptions) in grouped_params.items():
+        all_lr_descriptions = []
+        for (comp_type, comp_idx, is_ortho_group, is_lora_plus), params in grouped_params.items():
+
             # Determine Learning Rate for this group
             current_lr = None
             if comp_type == 'unet':
@@ -855,32 +855,39 @@ class LycorisNetworkKohya(LycorisNetwork):
                 logger.warning(f"Not training {group_name_prefix} as LR is {str(current_lr)}.")
                 continue
 
+            group_params = []
+            group_lr_descriptions = []
+            for p in params:
+                group_params.append(p[0])
+                group_lr_descriptions.append(p[1])
+
             group_dict = {
-                'params': params,
-                'descriptions': descriptions,
-                'orthograd': is_ortho_group # Set the flag for the optimizer
+                'params': group_params,
+                'lr_descriptions': group_lr_descriptions,
+                'is_ortho_group': is_ortho_group,
+                'is_lora_plus_group': is_lora_plus,
+                'lr': torch.tensor(current_lr),
             }
-            group_dict['lr'] = torch.tensor(current_lr)
 
-
-            group_name = f"{group_name_prefix}_Ortho" if is_ortho_group else f"{group_name_prefix}_NonOrtho"
+            group_name = f"{group_name_prefix}{'_Ortho' if is_ortho_group else ''}{'_Plus' if is_lora_plus else ''}"
             group_dict['name'] = group_name
             all_param_groups.append(group_dict)
-            lr_descriptions.append(descriptions)
+            all_lr_descriptions.append(group_lr_descriptions)
 
         logger.info(f"Training the following {len(all_param_groups)} parameter groups:")
         # Sort groups for consistent print order (optional)
         all_param_groups.sort(key=lambda g: g.get('name', ''))
         for i, group in enumerate(all_param_groups):
              logger.info(f"  Group {i} ('{group.get('name', 'Unnamed')}'): "
-                   f"OrthoGrad={group.get('orthograd', 'N/A')}, "
-                   f"LR={group.get('lr', 'Default')}, "
+                   f"is_ortho_group={group.get('is_ortho_group', 'N/A')}, "
+                   f"is_lora_plus_group={group.get('is_lora_plus_group', 'N/A')}, "
+                   f"lr={group.get('lr', 'Default')}, "
                    f"NumParams={len(group['params'])}")
 
         if not all_param_groups:
              raise Exception("No parameter groups were created. Check model parameters and targets.")
 
-        return all_param_groups, lr_descriptions
+        return all_param_groups, all_lr_descriptions
 
     def enable_gradient_checkpointing(self):
         # not supported
