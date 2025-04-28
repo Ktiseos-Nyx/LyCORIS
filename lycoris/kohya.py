@@ -806,13 +806,10 @@ class LycorisNetworkKohya(LycorisNetwork):
                             ((comp_type == 'textencoder' and (self.loraplus_text_encoder_lr_ratio is not None or self.loraplus_lr_ratio is not None)) or 
                              (comp_type == 'unet' and (self.loraplus_unet_lr_ratio is not None or self.loraplus_lr_ratio is not None))))
 
-            lr_description = f"{comp_type}{comp_idx if comp_type == 'textencoder' else ''}{' plus' if is_lora_plus else ''}"
-
             # Assign the parameter to the correct temporary list
             group_key = (comp_type, comp_idx, is_ortho_group, is_lora_plus)
-            grouped_params[group_key].append((param, lr_description))
+            grouped_params[group_key].append(param)
 
-        
         num_of_te = len(found_te_ids)
 
         # make sure text_encoder_lr as list of two elements
@@ -855,15 +852,11 @@ class LycorisNetworkKohya(LycorisNetwork):
                 logger.warning(f"Not training {group_name_prefix} as LR is {str(current_lr)}.")
                 continue
 
-            group_params = []
-            group_lr_descriptions = []
-            for p in params:
-                group_params.append(p[0])
-                group_lr_descriptions.append(p[1])
+            lr_description = f"{comp_type}{comp_idx if comp_type == 'textencoder' else ''}{' plus' if is_lora_plus else ''}"
 
             group_dict = {
-                'params': group_params,
-                'lr_descriptions': group_lr_descriptions,
+                'params': params,
+                'lr_description': lr_description,
                 'is_ortho_group': is_ortho_group,
                 'is_lora_plus_group': is_lora_plus,
                 'lr': torch.tensor(current_lr),
@@ -872,7 +865,7 @@ class LycorisNetworkKohya(LycorisNetwork):
             group_name = f"{group_name_prefix}{'_Ortho' if is_ortho_group else ''}{'_Plus' if is_lora_plus else ''}"
             group_dict['name'] = group_name
             all_param_groups.append(group_dict)
-            all_lr_descriptions.append(group_lr_descriptions)
+            all_lr_descriptions.append(lr_description)
 
         logger.info(f"Training the following {len(all_param_groups)} parameter groups:")
         # Sort groups for consistent print order (optional)
