@@ -558,10 +558,10 @@ class LycorisBaseModule(ModuleCustomSD):
         lora_up_grad = None
 
         # Use direct parameter access instead of named iteration (faster)
-        if hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None:
+        if hasattr(self, 'lora_down') and hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None:
             lora_down_grad = self.lora_down.weight.grad
             
-        if hasattr(self.lora_up, 'weight') and self.lora_up.weight.grad is not None:
+        if hasattr(self, 'lora_up') and hasattr(self.lora_up, 'weight') and self.lora_up.weight.grad is not None:
             lora_up_grad = self.lora_up.weight.grad
 
         if lora_down_grad is None or lora_up_grad is None:

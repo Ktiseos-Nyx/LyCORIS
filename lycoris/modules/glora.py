@@ -47,6 +47,8 @@ class GLoRAModule(LycorisBaseModule):
         rs_lora=False,
         ggpo_beta: Optional[float] = None,
         ggpo_sigma: Optional[float] = None,
+        ggpo_conv: bool = False,
+        ggpo_conv_weight_sample_size: int = 100,
         **kwargs,
     ):
         """
@@ -67,7 +69,9 @@ class GLoRAModule(LycorisBaseModule):
             rank_dropout_scale,
             bypass_mode,
             ggpo_beta,
-            ggpo_sigma
+            ggpo_sigma,
+            ggpo_conv,
+            ggpo_conv_weight_sample_size
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in GLoRA algo.")
