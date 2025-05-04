@@ -43,12 +43,9 @@ class GLoRAModule(LycorisBaseModule):
         use_scalar=False,
         rank_dropout_scale=False,
         weight_decompose=False,
+        wd_on_output=False,
         bypass_mode=None,
         rs_lora=False,
-        ggpo_beta: Optional[float] = None,
-        ggpo_sigma: Optional[float] = None,
-        ggpo_conv: bool = False,
-        ggpo_conv_weight_sample_size: int = 100,
         **kwargs,
     ):
         """
@@ -68,10 +65,10 @@ class GLoRAModule(LycorisBaseModule):
             lora_dropout,
             rank_dropout_scale,
             bypass_mode,
-            ggpo_beta,
-            ggpo_sigma,
-            ggpo_conv,
-            ggpo_conv_weight_sample_size
+            None,
+            None,
+            False,
+            0
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in GLoRA algo.")
@@ -193,7 +190,7 @@ class GLoRAModule(LycorisBaseModule):
     def make_weight(self, device=None):
         wa1 = self.a1.weight.view(self.a1.weight.size(0), -1)
         wa2 = self.a2.weight.view(self.a2.weight.size(0), -1)
-        orig = self.org_weight
+        orig = self.org_weight.to(dtype=wa1.dtype)
 
         if self.tucker:
             wb = tucker_weight_from_conv(self.b1.weight, self.b2.weight, self.bm.weight)
@@ -272,3 +269,25 @@ class GLoRAModule(LycorisBaseModule):
                 else self.org_module[0].bias.data
             )
             return self.op(x, weight, bias, **self.kw_dict)
+        
+    @torch.no_grad()
+    def apply_max_norm(self, max_norm, device=None):
+        orig_norm = self.make_weight(device).norm() * self.scale
+        norm = torch.clamp(orig_norm, max_norm / 2)
+        desired = torch.clamp(norm, max=max_norm)
+        ratio = desired.cpu() / norm.cpu()
+
+        scaled = norm != desired
+        if scaled:
+            self.scalar *= ratio
+            return scaled, orig_norm * ratio
+        else:
+            return 0, orig_norm
+
+    @torch.no_grad()
+    def get_norm(self, device=None):
+        # Norm before scale determined by alpha / r_factor
+        unscaled_norm = self.make_weight(device).norm()
+        # Norm after scale determined by alpha / r_factor
+        scaled_norm = unscaled_norm * self.scale
+        return unscaled_norm.item(), scaled_norm.item()
