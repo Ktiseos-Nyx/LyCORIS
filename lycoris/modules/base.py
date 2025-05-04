@@ -440,6 +440,12 @@ class LycorisBaseModule(ModuleCustomSD):
         if not(self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)):
             return
         
+        if not (hasattr(self, 'lora_down') and hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None):
+            return
+        
+        if not (hasattr(self, 'lora_up') and hasattr(self.lora_up, 'weight') and self.lora_down.weight.grad is not None):
+            return
+        
         # Skip update every other step for convolutions to reduce overhead
         if self.module_type != "linear" and hasattr(self, '_skip_counter'):
             self._skip_counter = not self._skip_counter
@@ -544,6 +550,12 @@ class LycorisBaseModule(ModuleCustomSD):
         
         if not(self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)):
             return
+        
+        if not (hasattr(self, 'lora_down') and hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None):
+            return
+        
+        if not (hasattr(self, 'lora_up') and hasattr(self.lora_up, 'weight') and self.lora_down.weight.grad is not None):
+            return
             
         # Skip update every other step for convolutions to reduce overhead
         if self.module_type != "linear" and hasattr(self, '_skip_grad_counter'):
@@ -553,19 +565,9 @@ class LycorisBaseModule(ModuleCustomSD):
         else:
             self._skip_grad_counter = False
 
-        # Check for gradients
-        lora_down_grad = None
-        lora_up_grad = None
-
         # Use direct parameter access instead of named iteration (faster)
-        if hasattr(self, 'lora_down') and hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None:
-            lora_down_grad = self.lora_down.weight.grad
-            
-        if hasattr(self, 'lora_up') and hasattr(self.lora_up, 'weight') and self.lora_up.weight.grad is not None:
-            lora_up_grad = self.lora_up.weight.grad
-
-        if lora_down_grad is None or lora_up_grad is None:
-            return
+        lora_down_grad = self.lora_down.weight.grad
+        lora_up_grad = self.lora_up.weight.grad
         
         # Fast path for linear layers
         if self.module_type == "linear":
