@@ -651,3 +651,6 @@ class LycorisBaseModule(ModuleCustomSD):
                 else:
                     self.sum_grads += grad.sum()
                     self.sum_squared_grads += (grad**2).sum()
+
+    def ggpo_pertubation(self, x):
+        return None

@@ -142,12 +142,8 @@ class LoConModule(LycorisBaseModule):
                     .transpose(1, 0)
                 ).float()
 
-        if dropout:
-            self.dropout = nn.Dropout(dropout)
-            if self.wd:
-                log_wd()
-        else:
-            self.dropout = nn.Identity()
+        if dropout and self.wd:
+            log_wd()
 
         if type(alpha) == torch.Tensor:
             alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
@@ -334,7 +330,7 @@ class LoConModule(LycorisBaseModule):
         else:
             up = self.lora_up(mid)
 
-        return self.dropout(up * self.scalar * self.scale * scale)
+        return self.drop(up * self.scalar * self.scale * scale)
 
     def bypass_forward(self, x, scale=1):
         return self.org_forward(x) + self.bypass_forward_diff(x, scale=scale)
@@ -435,7 +431,7 @@ class LoConModule(LycorisBaseModule):
                 # Note: We don't need to simulate lora_dropout_up here because the weight_decompose 
                 # approach already handles the output feature scaling differently
 
-            x = self.dropout(x)
+            x = self.drop(x)
         else:
             weight = weight + diff_weight * self.multiplier
         
@@ -452,9 +448,6 @@ class LoConModule(LycorisBaseModule):
             if perturbation_output is not None:
                 # Add perturbation to result and return
                 result = result + perturbation_output
-                
-            # Add perturbation to result
-            result = result + perturbation_output
         
         return result
 

@@ -333,7 +333,7 @@ class LycorisNetwork(torch.nn.Module):
             self.alpha = 1
             self.conv_lora_dim = 0
             self.conv_alpha = 1
-            self.dropout = 0
+            self.dropout = 0.0
             self.rank_dropout = 0
             self.module_dropout = 0
             self.lora_dropout = 0,
