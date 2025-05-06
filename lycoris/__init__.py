@@ -12,6 +12,7 @@ from .modules.loha import LohaModule
 from .modules.lokr import LokrModule
 from .modules.dylora import DyLoraModule
 from .modules.glora import GLoRAModule
+from .modules.glora_extended import GLoRAExtendedModule
 from .modules.norms import NormModule
 from .modules.full import FullModule
 from .modules.diag_oft import DiagOFTModule

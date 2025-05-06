@@ -11,13 +11,11 @@ from ..logging import logger
 
 from .base import LycorisBaseModule
 
-from ..utils.general import lora_dropout_down, lora_dropout_up
-
 @cache
 def log_glora_drop():
     return logger.warning(
-        "Using GLoRA with bypass_mode=False cause network or LoRA dropout " \
-        "to be applied to the forward input instead of the layers. Requiring much lower values for dropout." \
+        "Using GLoRA with bypass_mode=False will result in network or LoRA dropout " \
+        "being applied to the forward input instead of the layers. Requiring much lower values for dropout." \
         "Note: Bypass mode may not behave the same, so test and compare if desired."
     )
 

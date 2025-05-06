@@ -14,6 +14,7 @@ from lycoris.modules import (
     DiagOFTModule,
     ButterflyOFTModule,
     GLoRAModule,
+    GLoRAExtendedModule,
     DyLoraModule,
     IA3Module,
 )
@@ -27,6 +28,7 @@ modules: list[LycorisBaseModule] = [
     DiagOFTModule,
     ButterflyOFTModule,
     GLoRAModule,
+    GLoRAExtendedModule,
     DyLoraModule,
     IA3Module,
 ]
