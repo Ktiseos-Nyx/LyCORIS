@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from .base import LycorisBaseModule
 from ..logging import logger
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
 
 
 @cache
@@ -48,7 +48,7 @@ class GLoRAExtendedModule(LycorisBaseModule):
         org_module: nn.Module,
         multiplier: float = 1.0,
         lora_dim: int = 4,
-        alpha: Any[float,torch.Tensor] = 1.0,
+        alpha: float|torch.Tensor = 1.0,
         dropout: float = 0.0,
         rank_dropout: float = 0.0,
         module_dropout: float = 0.0,
