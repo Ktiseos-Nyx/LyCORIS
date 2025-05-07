@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from .base import LycorisBaseModule
 from ..logging import logger
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 
 
 @cache
@@ -48,7 +48,7 @@ class GLoRAExtendedModule(LycorisBaseModule):
         org_module: nn.Module,
         multiplier: float = 1.0,
         lora_dim: int = 4,
-        alpha: float = 1.0,
+        alpha: Any[float,torch.Tensor] = 1.0,
         dropout: float = 0.0,
         rank_dropout: float = 0.0,
         module_dropout: float = 0.0,
@@ -145,15 +145,17 @@ class GLoRAExtendedModule(LycorisBaseModule):
         else:
             self.register_buffer("e_param", torch.zeros(0), persistent=False)
 
-        if isinstance(self.alpha_val, torch.Tensor):
-            self.alpha_val = self.alpha_val.detach().float().item()
+        if type(alpha) == torch.Tensor:
+            alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
+        alpha = lora_dim if alpha is None or alpha == 0 else alpha
 
-        r_factor = float(lora_dim)
-        if self.rs_lora and r_factor > 0:
+        r_factor = lora_dim
+        if self.rs_lora:
             r_factor = math.sqrt(r_factor)
 
-        self.lora_scaling = self.alpha_val / r_factor if r_factor > 0 else 0.0
-        self.register_buffer("alpha", torch.tensor(self.alpha_val))
+        self.scale = alpha / r_factor
+
+        self.register_buffer("alpha", torch.tensor(alpha))  # 定数として扱える
 
         if use_scalar:
             self.scalar = nn.Parameter(torch.tensor(0.0))
@@ -241,7 +243,7 @@ class GLoRAExtendedModule(LycorisBaseModule):
         raw_delta_W, raw_delta_B = self._calculate_raw_delta_weight_and_bias(device=device, dtype=dtype)
 
         current_scalar = self._get_current_scalar_value()
-        effective_scale = self.lora_scaling * current_scalar * multiplier
+        effective_scale = self.scale * current_scalar * multiplier
 
         delta_W = raw_delta_W * effective_scale
         delta_B = raw_delta_B * effective_scale if raw_delta_B is not None else None
@@ -292,11 +294,13 @@ class GLoRAExtendedModule(LycorisBaseModule):
     def custom_state_dict(self):
         sd = {
             "alpha": self.alpha,
-            "a1.weight": self.a1.weight, "a2.weight": self.a2.weight,
-            "b1.weight": self.b1.weight, "b2.weight": self.b2.weight,
-            "c1.weight": self.c1.weight, "c2.weight": self.c2.weight,
+            "a1.weight": self.a1.weight, 
+            "a2.weight": self.a2.weight,
+            "b1.weight": self.b1.weight, 
+            "b2.weight": self.b2.weight,
+            "c1.weight": self.c1.weight, 
+            "c2.weight": self.c2.weight,
         }
-        if isinstance(self.scalar, nn.Parameter): sd["scalar"] = self.scalar.data
         if isinstance(self.d_param, nn.Parameter): sd["d_param"] = self.d_param
         if isinstance(self.e_param, nn.Parameter): sd["e_param"] = self.e_param
         return sd
@@ -307,7 +311,6 @@ class GLoRAExtendedModule(LycorisBaseModule):
         lora_name: str,
         orig_module: nn.Module,
         alpha: torch.Tensor,
-        scalar: Optional[torch.Tensor] = None,
         a1_weight: Optional[torch.Tensor] = None, a2_weight: Optional[torch.Tensor] = None,
         b1_weight: Optional[torch.Tensor] = None, b2_weight: Optional[torch.Tensor] = None,
         c1_weight: Optional[torch.Tensor] = None, c2_weight: Optional[torch.Tensor] = None,
@@ -316,13 +319,13 @@ class GLoRAExtendedModule(LycorisBaseModule):
         if a1_weight is None:
             raise ValueError("a1.weight is required for GLoRAExtendedModule.")
 
-        lora_dim = a1_weight.size(0)
-
         module = cls(
-            lora_name=lora_name, org_module=orig_module, lora_dim=lora_dim,
-            alpha=alpha.item(),
-            apply_d=(d_param_tensor is not None), apply_e=(e_param_tensor is not None),
-            use_scalar=(scalar is not None)
+            lora_name=lora_name, 
+            org_module=orig_module, 
+            lora_dim=a1_weight.size(0),
+            alpha=float(alpha),
+            apply_d=(d_param_tensor is not None), 
+            apply_e=(e_param_tensor is not None),
         )
 
         def _copy_param_or_buffer(target, source_tensor, name_for_log):
@@ -339,19 +342,28 @@ class GLoRAExtendedModule(LycorisBaseModule):
         _copy_param_or_buffer(module.c1.weight.data, c1_weight, "c1.weight")
         _copy_param_or_buffer(module.c2.weight.data, c2_weight, "c2.weight")
 
-        if scalar is not None: _copy_param_or_buffer(module.scalar.data if isinstance(module.scalar, nn.Parameter) else module.scalar, scalar, "scalar")
         if d_param_tensor is not None: _copy_param_or_buffer(module.d_param.data, d_param_tensor, "d_param")
         if e_param_tensor is not None: _copy_param_or_buffer(module.e_param.data, e_param_tensor, "e_param")
 
         return module
+    
+    def load_weight_hook(self, module: nn.Module, incompatible_keys):
+        missing_keys = incompatible_keys.missing_keys
+        for key in missing_keys:
+            if "scalar" in key:
+                del missing_keys[missing_keys.index(key)]
+        if isinstance(self.scalar, nn.Parameter):
+            self.scalar.data.copy_(torch.ones_like(self.scalar))
+        elif getattr(self, "scalar", None) is not None:
+            self.scalar.copy_(torch.ones_like(self.scalar))
+        else:
+            self.register_buffer(
+                "scalar", torch.ones_like(self.scalar), persistent=False
+            )
 
     @torch.no_grad()
-    def get_norm(self, device=None, dtype=None) -> Optional[Tuple[float, float]]:
-        if dtype is None: dtype = self.dtype
-        raw_delta_w, _ = self._calculate_raw_delta_weight_and_bias(device, dtype)
-        if raw_delta_w is None: return None
-
-        current_scalar = self._get_current_scalar_value()
-        unscaled_norm = raw_delta_w.norm()
-        fully_scaled_delta_norm = unscaled_norm * self.lora_scaling * current_scalar
-        return unscaled_norm.item(), fully_scaled_delta_norm.item()
+    def get_norm(self, device=None):
+        lora_diff_weight, _ = self._calculate_raw_delta_weight_and_bias(device)
+        unscaled_norm = lora_diff_weight.norm()
+        scaled_norm = unscaled_norm * self.scale
+        return unscaled_norm.item(), scaled_norm.item()
