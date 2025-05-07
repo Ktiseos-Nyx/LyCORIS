@@ -29,16 +29,15 @@ class GLoRAExtendedModule(LycorisBaseModule):
     }
     # Order matters for Lycoris framework's extract_state_dict and make_module_from_state_dict
     weight_list = [
-        "alpha",      # 0
-        "scalar",     # 1 (Optional, will be None if not use_scalar)
-        "a1.weight",  # 2
-        "a2.weight",  # 3
-        "b1.weight",  # 4
-        "b2.weight",  # 5
-        "c1.weight",  # 6
-        "c2.weight",  # 7
-        "d_param",    # 8 (Optional)
-        "e_param",    # 9 (Optional)
+        "a1.weight",
+        "a2.weight",
+        "b1.weight",
+        "b2.weight",
+        "c1.weight",
+        "c2.weight",
+        "d_param",
+        "e_param",
+        "alpha",
     ]
     weight_list_det = ["a1.weight"] # Used for algo_check
 
@@ -293,13 +292,13 @@ class GLoRAExtendedModule(LycorisBaseModule):
 
     def custom_state_dict(self):
         sd = {
-            "alpha": self.alpha,
             "a1.weight": self.a1.weight, 
             "a2.weight": self.a2.weight,
             "b1.weight": self.b1.weight, 
             "b2.weight": self.b2.weight,
             "c1.weight": self.c1.weight, 
             "c2.weight": self.c2.weight,
+            "alpha": self.alpha,
         }
         if isinstance(self.d_param, nn.Parameter): sd["d_param"] = self.d_param
         if isinstance(self.e_param, nn.Parameter): sd["e_param"] = self.e_param
@@ -310,11 +309,15 @@ class GLoRAExtendedModule(LycorisBaseModule):
         cls,
         lora_name: str,
         orig_module: nn.Module,
+        a1_weight: torch.Tensor, 
+        a2_weight: torch.Tensor,
+        b1_weight: torch.Tensor, 
+        b2_weight: torch.Tensor,
+        c1_weight: torch.Tensor, 
+        c2_weight: torch.Tensor,
+        d_param_tensor: Optional[torch.Tensor], 
+        e_param_tensor: Optional[torch.Tensor],
         alpha: torch.Tensor,
-        a1_weight: Optional[torch.Tensor] = None, a2_weight: Optional[torch.Tensor] = None,
-        b1_weight: Optional[torch.Tensor] = None, b2_weight: Optional[torch.Tensor] = None,
-        c1_weight: Optional[torch.Tensor] = None, c2_weight: Optional[torch.Tensor] = None,
-        d_param_tensor: Optional[torch.Tensor] = None, e_param_tensor: Optional[torch.Tensor] = None,
     ):
         if a1_weight is None:
             raise ValueError("a1.weight is required for GLoRAExtendedModule.")
