@@ -837,12 +837,14 @@ class LycorisNetworkKohya(LycorisNetwork):
             current_lr = None
             if comp_type == 'unet':
                 if is_lora_plus:
-                    current_lr = (unet_lr if unet_lr is not None else learning_rate) * self.loraplus_unet_lr_ratio or self.loraplus_lr_ratio
+                    current_lr = ((unet_lr if unet_lr is not None else learning_rate) * 
+                                  (self.loraplus_unet_lr_ratio if self.loraplus_unet_lr_ratio is not None else self.loraplus_lr_ratio))
                 else:
                     current_lr = unet_lr if unet_lr is not None else learning_rate
             elif comp_type == 'textencoder':
                 if is_lora_plus:
-                    current_lr = text_encoder_lr[comp_idx - 1] * self.loraplus_text_encoder_lr_ratio or self.loraplus_lr_ratio
+                    current_lr = ((text_encoder_lr[comp_idx - 1] * 
+                                   (self.loraplus_text_encoder_lr_ratio if self.loraplus_text_encoder_lr_ratio is not None else self.loraplus_lr_ratio)))
                 else:
                     current_lr = text_encoder_lr[comp_idx - 1]
                 
