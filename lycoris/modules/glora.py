@@ -336,9 +336,7 @@ class GLoRAModule(LycorisBaseModule):
     def get_norm(self, device=None):
         # Norm before scale determined by alpha / r_factor
         unscaled_norm = self.make_weight(device).norm()
-        # Norm after scale determined by alpha / r_factor
-        scaled_norm = unscaled_norm * self.scale
-        return unscaled_norm.item(), scaled_norm.item()
+        return unscaled_norm
 
     def ggpo_pertubation(self, x):
         # Optimized perturbation generation based on module type

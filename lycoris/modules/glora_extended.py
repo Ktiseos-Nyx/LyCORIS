@@ -368,5 +368,4 @@ class GLoRAExtendedModule(LycorisBaseModule):
     def get_norm(self, device=None):
         lora_diff_weight, _ = self._calculate_raw_delta_weight_and_bias(device)
         unscaled_norm = lora_diff_weight.norm()
-        scaled_norm = unscaled_norm * self.scale
-        return unscaled_norm.item(), scaled_norm.item()
+        return unscaled_norm

@@ -715,16 +715,13 @@ class LycorisNetworkKohya(LycorisNetwork):
         return key_scaled, sum(norms) / len(norms), max(norms)
     
     def get_norms(self, device):
-        scaled_norms = []
         unscaled_norms = []
         for module in self.unet_loras + self.text_encoder_loras:
-            unscaled_norm, scaled_norm = module.get_norm(device)
-            if not (unscaled_norm is None or np.isnan(unscaled_norm) or np.isinf(unscaled_norm)):
+            unscaled_norm = module.get_norm(device)
+            if isinstance(unscaled_norm, torch.Tensor):
                 unscaled_norms.append(unscaled_norm)
-            if not (scaled_norm is None or np.isnan(scaled_norm) or np.isinf(scaled_norm)):
-                scaled_norms.append(scaled_norm)
 
-        return unscaled_norms, scaled_norms
+        return torch.stack(unscaled_norms)
 
     def set_loraplus_lr_ratio(
         self, loraplus_lr_ratio, loraplus_unet_lr_ratio, loraplus_text_encoder_lr_ratio

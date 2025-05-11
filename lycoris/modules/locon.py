@@ -300,9 +300,7 @@ class LoConModule(LycorisBaseModule):
     def get_norm(self, device=None):
         # Norm before scale determined by alpha / r_factor
         unscaled_norm = self.make_weight(device).norm()
-        # Norm after scale determined by alpha / r_factor
-        scaled_norm = unscaled_norm * self.scale
-        return unscaled_norm.item(), scaled_norm.item()
+        return unscaled_norm
 
     def bypass_forward_diff(self, x, scale=1):
         if self.lora_dropout is not None and self.training and self.lora_dropout > 0:

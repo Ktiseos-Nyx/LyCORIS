@@ -305,9 +305,7 @@ class LohaModule(LycorisBaseModule):
         weight = self.get_weight(self.shape)
         # Norm before scale determined by self.scalar
         unscaled_norm = weight.norm()
-        # Norm after scale determined by self.scalar
-        scaled_norm = (weight * self.scalar).norm()
-        return unscaled_norm.item(), scaled_norm.item()
+        return unscaled_norm
 
     def bypass_forward_diff(self, x, scale=1):
         diff_weight = self.get_weight(self.shape) * self.scalar * scale
