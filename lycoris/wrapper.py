@@ -767,15 +767,15 @@ class LycorisNetwork(torch.nn.Module):
             if hasattr(lora, "grad_norms") and lora.grad_norms is not None:
                 # Take mean of each module's gradient norms to get a scalar
                 try:
-                    module_norm = lora.grad_norms.mean().item()
-                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                    module_norm = lora.grad_norms.mean()
+                    if isinstance(module_norm, torch.Tensor):
                         all_norms.append(module_norm)
                 except:
                     # Skip problematic modules
                     continue
         
         # Create tensor from scalars (very efficient)
-        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        result = torch.stack(all_norms) if all_norms else torch.tensor([])
         
         # Cache the result
         self._cached_grad_norms = result
@@ -795,15 +795,15 @@ class LycorisNetwork(torch.nn.Module):
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "weight_norms") and lora.weight_norms is not None:
                 try:
-                    module_norm = lora.weight_norms.mean().item()
-                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                    module_norm = lora.weight_norms.mean()
+                    if isinstance(module_norm, torch.Tensor):
                         all_norms.append(module_norm)
                 except:
                     # Skip problematic modules
                     continue
         
         # Create tensor from scalars
-        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        result = torch.stack(all_norms) if all_norms else torch.tensor([])
         
         # Cache the result
         self._cached_weight_norms = result
@@ -823,15 +823,15 @@ class LycorisNetwork(torch.nn.Module):
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "combined_weight_norms") and lora.combined_weight_norms is not None:
                 try:
-                    module_norm = lora.combined_weight_norms.mean().item()
-                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                    module_norm = lora.combined_weight_norms.mean()
+                    if isinstance(module_norm, torch.Tensor):
                         all_norms.append(module_norm)
                 except:
                     # Skip problematic modules
                     continue
         
         # Create tensor from scalars
-        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        result = torch.stack(all_norms) if all_norms else torch.tensor([])
         
         # Cache the result
         self._cached_combined_norms = result
@@ -894,4 +894,4 @@ class LycorisNetwork(torch.nn.Module):
         # # Calculate GNS using provided gradient norm squared
         # gradient_noise_scale = trace_cov / grad_norm_squared
 
-        return gradient_noise_scale.item(), variance.item()
+        return gradient_noise_scale, variance

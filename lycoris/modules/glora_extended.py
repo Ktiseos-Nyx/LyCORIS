@@ -176,9 +176,6 @@ class GLoRAExtendedModule(LycorisBaseModule):
         if isinstance(self.d_param, nn.Parameter): torch.nn.init.zeros_(self.d_param)
         if isinstance(self.e_param, nn.Parameter): torch.nn.init.zeros_(self.e_param)
 
-    def _get_current_scalar_value(self) -> float:
-        return self.scalar.item()
-
     def _calculate_raw_delta_weight_and_bias(self, device=None, dtype=None) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if device is None: device = self.device
         if dtype is None: dtype = self.dtype
@@ -241,8 +238,7 @@ class GLoRAExtendedModule(LycorisBaseModule):
         if dtype is None: dtype = self.dtype # Use module's default dtype if not specified
         raw_delta_W, raw_delta_B = self._calculate_raw_delta_weight_and_bias(device=device, dtype=dtype)
 
-        current_scalar = self._get_current_scalar_value()
-        effective_scale = self.scale * current_scalar * multiplier
+        effective_scale = self.scale * self.scalar * multiplier
 
         delta_W = raw_delta_W * effective_scale
         delta_B = raw_delta_B * effective_scale if raw_delta_B is not None else None
