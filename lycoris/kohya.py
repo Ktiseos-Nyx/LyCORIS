@@ -34,6 +34,8 @@ import warnings
 
 from collections import defaultdict
 
+LORA_PLUS_TARGETS = ["lora_up","a2","b2"]
+
 
 def create_network(
     multiplier, network_dim, network_alpha, vae, text_encoder, unet, **kwargs
@@ -418,6 +420,16 @@ class LycorisNetworkKohya(LycorisNetwork):
         if self.wd_on_output is not None:
             logger.info(f"wd_on_output={self.wd_on_output}")
 
+        if self.loraplus_lr_ratio is not None:
+            logger.info(f"loraplus_lr_ratio={self.loraplus_lr_ratio}")
+
+        if self.loraplus_unet_lr_ratio is not None:
+            logger.info(f"loraplus_unet_lr_ratio={self.loraplus_unet_lr_ratio}")
+
+        if self.loraplus_text_encoder_lr_ratio is not None:
+            logger.info(f"loraplus_text_encoder_lr_ratio={self.loraplus_text_encoder_lr_ratio}")
+
+
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
@@ -737,6 +749,8 @@ class LycorisNetworkKohya(LycorisNetwork):
             f"LoRA+ Text Encoder LR Ratio: {self.loraplus_text_encoder_lr_ratio or self.loraplus_lr_ratio}"
         )
 
+
+
     def prepare_optimizer_params(self,
                                      text_encoder_lr: Optional[float|int|List[float]|Tuple[float]] = None,
                                      unet_lr: Optional[float] = None,
@@ -799,7 +813,7 @@ class LycorisNetworkKohya(LycorisNetwork):
             # Determine if this parameter should go into the OrthoGrad=True group
             is_ortho_group = apply_orthograd and is_target
 
-            is_lora_plus = (name is not None and 'lora_up' in name and
+            is_lora_plus = (name is not None and any(target in name for target in LORA_PLUS_TARGETS) and
                             ((comp_type == 'textencoder' and (self.loraplus_text_encoder_lr_ratio is not None or self.loraplus_lr_ratio is not None)) or 
                              (comp_type == 'unet' and (self.loraplus_unet_lr_ratio is not None or self.loraplus_lr_ratio is not None))))
 
