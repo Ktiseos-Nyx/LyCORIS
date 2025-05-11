@@ -16,7 +16,7 @@ from typing import Optional
 @cache
 def log_butterfly_factorize(dim, factor, result):
     logger.info(
-        f"Use BOFT({int(log2(result[1]))}, {result[0]//2})"
+        f"Use BOFT(num_stages={int(log2(result[1]))}, elementary_block_size={result[0]})"
         f" (equivalent to factor={result[0]}) "
         f"for {dim=} and {factor=}"
     )
@@ -92,7 +92,7 @@ class ButterflyOFTModule(LycorisBaseModule):
         self.block_num = m_exp
         # BOFT(m, b)
         self.boft_b = b
-        self.boft_m = sum(int(i) for i in f"{m_exp-1:b}") + 1
+        self.boft_m = int(log2(m_exp))
         # block_num > block_size
         self.rescaled = rescaled
         self.constraint = constraint * out_dim
@@ -100,6 +100,8 @@ class ButterflyOFTModule(LycorisBaseModule):
         self.oft_blocks = nn.Parameter(
             torch.zeros(self.boft_m, self.block_num, self.block_size, self.block_size)
         )
+
+        self.register_buffer("I", torch.eye(self.block_size))
         if rescaled:
             self.rescale = nn.Parameter(
                 torch.ones(out_dim, *(1 for _ in range(org_module.weight.dim() - 1)))
@@ -130,10 +132,6 @@ class ButterflyOFTModule(LycorisBaseModule):
         if rescale is not None:
             module.rescale.copy_(rescale)
         return module
-
-    @property
-    def I(self):
-        return torch.eye(self.block_size, device=self.device)
 
     def get_r(self):
         I = self.I
@@ -265,5 +263,12 @@ class ButterflyOFTModule(LycorisBaseModule):
             return self.bypass_forward(x, scale)
         else:
             w = self.make_weight(scale, x.device)
-            kw_dict = self.kw_dict | {"weight": w, "bias": self.org_module[0].bias}
+
+            current_bias = None
+            if hasattr(self.org_module[0], 'bias') and self.org_module[0].bias is not None:
+                current_bias = self.org_module[0].bias
+            
+            kw_dict = {**self.kw_dict, "weight": w, "bias": current_bias}
+
             return self.op(x, **kw_dict)
+

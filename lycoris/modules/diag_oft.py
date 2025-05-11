@@ -80,6 +80,8 @@ class DiagOFTModule(LycorisBaseModule):
         self.oft_blocks = nn.Parameter(
             torch.zeros(self.block_num, self.block_size, self.block_size)
         )
+
+        self.register_buffer("I", torch.eye(self.block_size))
         if rescaled:
             self.rescale = nn.Parameter(
                 torch.ones(out_dim, *(1 for _ in range(org_module.weight.dim() - 1)))
@@ -117,10 +119,6 @@ class DiagOFTModule(LycorisBaseModule):
         if rescale is not None:
             module.rescale.copy_(rescale)
         return module
-
-    @property
-    def I(self):
-        return torch.eye(self.block_size, device=self.device)
 
     def get_r(self):
         I = self.I
@@ -227,5 +225,11 @@ class DiagOFTModule(LycorisBaseModule):
             return self.bypass_forward(x, scale)
         else:
             w = self.make_weight(scale, x.device)
-            kw_dict = self.kw_dict | {"weight": w, "bias": self.org_module[0].bias}
+            
+            current_bias = None
+            if hasattr(self.org_module[0], 'bias') and self.org_module[0].bias is not None:
+                current_bias = self.org_module[0].bias
+            
+            kw_dict = {**self.kw_dict, "weight": w, "bias": current_bias}
+
             return self.op(x, **kw_dict)
