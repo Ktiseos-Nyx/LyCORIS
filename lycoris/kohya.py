@@ -74,6 +74,10 @@ def create_network(
     rs_lora = str_bool(kwargs.get("rs_lora", False))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
     train_t5xxl = str_bool(kwargs.get("train_t5xxl", False))
+    torch_compile = str_bool(kwargs.get("torch_compile", False))
+    torch_compile_mode = kwargs.get("torch_compile_mode", "max-autotune")
+    torch_compile_dynamic = str_bool(kwargs.get("torch_compile_dynamic", False))
+    torch_compile_fullgraph = str_bool(kwargs.get("torch_compile_fullgraph", True))
     
     ggpo_beta = kwargs.get("ggpo_beta", None)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
@@ -142,6 +146,12 @@ def create_network(
     if algo == "ia3" and preset_str != "ia3":
         logger.warning("It is recommended to use preset ia3 for IA^3 algorithm")
 
+    if torch_compile:
+        logger.info(f"Torch compile enabled for network.\n \
+                    dynamic={torch_compile_dynamic}\n \
+                    mode={torch_compile_mode}\n \
+                    fullgraph={torch_compile_fullgraph}")
+
     network = LycorisNetworkKohya(
         text_encoder,
         unet,
@@ -184,7 +194,11 @@ def create_network(
             loraplus_lr_ratio, loraplus_unet_lr_ratio, loraplus_text_encoder_lr_ratio
         )
 
-    return network
+    if torch_compile:
+        with torch._dynamo.utils.disable_cache_limit():
+            return torch.compile(network, dynamic=torch_compile_dynamic, mode=torch_compile_mode, fullgraph=torch_compile_fullgraph)
+    else:
+        return network
 
 
 def create_network_from_weights(
@@ -273,8 +287,7 @@ def create_network_from_weights(
     for lora in network.unet_loras + network.text_encoder_loras:
         lora.multiplier = multiplier
 
-    return network, weights_sd
-
+    return network
 
 class LycorisNetworkKohya(LycorisNetwork):
     """

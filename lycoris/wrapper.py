@@ -104,6 +104,10 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     bypass_mode = str_bool(kwargs.get("bypass_mode", False))
     rs_lora = str_bool(kwargs.get("rs_lora", False))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
+    torch_compile = str_bool(kwargs.get("torch_compile", False))
+    torch_compile_mode = kwargs.get("torch_compile_mode", "max-autotune")
+    torch_compile_dynamic = str_bool(kwargs.get("torch_compile_dynamic", False))
+    torch_compile_fullgraph = str_bool(kwargs.get("torch_compile_fullgraph", True))
 
     ggpo_beta = kwargs.get("ggpo_beta", None)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
@@ -156,6 +160,12 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
 
     logger.info(f"Using rank adaptation algo: {algo}")
 
+    if torch_compile:
+        logger.info(f"Torch compile enabled for network.\n \
+                    dynamic={torch_compile_dynamic}\n \
+                    mode={torch_compile_mode}\n \
+                    fullgraph={torch_compile_fullgraph}")
+
     network = LycorisNetwork(
         module,
         multiplier=multiplier,
@@ -187,7 +197,11 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
     )
 
-    return network
+    if torch_compile:
+        with torch._dynamo.utils.disable_cache_limit():
+            return torch.compile(network, dynamic=torch_compile_dynamic, mode=torch_compile_mode, fullgraph=torch_compile_fullgraph)
+    else:
+        return network
 
 
 def create_lycoris_from_weights(multiplier, file, module, weights_sd=None, **kwargs):
