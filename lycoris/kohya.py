@@ -287,7 +287,8 @@ def create_network_from_weights(
     for lora in network.unet_loras + network.text_encoder_loras:
         lora.multiplier = multiplier
 
-    return network
+    return network, weights_sd
+
 
 class LycorisNetworkKohya(LycorisNetwork):
     """

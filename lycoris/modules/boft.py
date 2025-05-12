@@ -101,7 +101,7 @@ class ButterflyOFTModule(LycorisBaseModule):
             torch.zeros(self.boft_m, self.block_num, self.block_size, self.block_size)
         )
 
-        self.register_buffer("I", torch.eye(self.block_size, device=self.oft_blocks.device, dtype=self.oft_blocks.dtype))
+        self.register_buffer("I", torch.eye(self.block_size))
         if rescaled:
             self.rescale = nn.Parameter(
                 torch.ones(out_dim, *(1 for _ in range(org_module.weight.dim() - 1)))
@@ -134,7 +134,7 @@ class ButterflyOFTModule(LycorisBaseModule):
         return module
 
     def get_r(self):
-        I = self.I.to(device=self.oft_blocks.device, dtype=self.oft_blocks.dtype)
+        I = self.I
         # for Q = -Q^T
         q = self.oft_blocks - self.oft_blocks.transpose(-1, -2)
         normed_q = q
@@ -144,10 +144,7 @@ class ButterflyOFTModule(LycorisBaseModule):
             if q_norm > self.constraint:
                 normed_q = q * self.constraint / q_norm
         # use float() to prevent unsupported type
-
-        q_float = normed_q.float()
-        I_float = I.float()
-        r = (I_float + q_float) @ torch.inverse(I_float - q_float)
+        r = (I + normed_q) @ (I - normed_q).float().inverse()
         return r
     
     def _apply_multiplicative_dropout(self, r: torch.Tensor) -> torch.Tensor:
@@ -199,25 +196,15 @@ class ButterflyOFTModule(LycorisBaseModule):
         b = self.boft_b
         r_b = b // 2
         r = self.get_r()
-        
         r = self._apply_multiplicative_dropout(r)
-        
-        # Ensure org_weight is on the correct device and dtype early
-        org_weight_dtype = self.org_module[0].weight.dtype
-        r_dtype = r.dtype # Usually float32 due to inverse, ensure consistency
-        target_dtype = torch.promote_types(org_weight_dtype, r_dtype)
-
-        if device is None:
-            device = self.oft_blocks.device
-            
-        inp = org = self.org_weight.to(device, dtype=target_dtype)
+        inp = org = self.org_weight.to(device, dtype=r.dtype)
 
         for i in range(m):
             bi = r[i]  # b_num, b_size, b_size
             g = 2
             k = 2**i * r_b
             if scale != 1:
-                bi = bi * scale + (1 - scale) * self.I.to(device=bi.device, dtype=bi.dtype)
+                bi = bi * scale + (1 - scale) * self.I
             inp = (
                 inp.unflatten(0, (-1, g, k))
                 .transpose(1, 2)
@@ -230,12 +217,12 @@ class ButterflyOFTModule(LycorisBaseModule):
             )
 
         if self.rescaled:
-            inp = inp * self.rescale.to(device=inp.device, dtype=inp.dtype)
+            inp = inp * self.rescale
 
         if diff:
             inp = inp - org
 
-        return inp.to(self.org_module[0].weight.dtype)
+        return inp.to(self.oft_blocks.dtype)
 
     def get_diff_weight(self, multiplier=1, shape=None, device=None):
         diff = self.make_weight(scale=multiplier, device=device, diff=True)
@@ -284,7 +271,7 @@ class ButterflyOFTModule(LycorisBaseModule):
             g = 2
             k = 2**i * r_b
             if scale != 1:
-                bi = bi * scale + (1 - scale) * self.I.to(device=bi.device, dtype=bi.dtype)
+                bi = bi * scale + (1 - scale) * self.I
             inp = (
                 inp.unflatten(-1, (-1, g, k))
                 .transpose(-2, -1)
@@ -297,7 +284,7 @@ class ButterflyOFTModule(LycorisBaseModule):
             )
 
         if self.rescaled:
-            inp = inp * self.rescale.to(device=inp.device, dtype=inp.dtype).transpose(0, -1)
+            inp = inp * self.rescale.transpose(0, -1)
 
         if self.op in {F.conv2d, F.conv1d, F.conv3d}:
             inp = inp.transpose(1, -1)
