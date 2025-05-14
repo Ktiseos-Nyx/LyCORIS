@@ -299,23 +299,6 @@ class GLoRAModule(LycorisBaseModule):
 
             result = self.op(x, weight, bias, **self.kw_dict)
 
-            # Check if perturbation is needed - early return if not in training
-            apply_ggpo = (self.training and 
-                        self.ggpo_sigma is not None and 
-                        self.ggpo_beta is not None and 
-                        self.combined_weight_norms is not None and 
-                        self.grad_norms is not None and
-                        (self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)))
-
-            # Apply GGPO perturbation if needed
-            if apply_ggpo:
-                with torch.no_grad():
-                    perturbation_output = self.ggpo_pertubation(x)
-                    
-                if perturbation_output is not None:
-                    # Add perturbation to result and return
-                    result = result + perturbation_output
-
             return result
         
     @torch.no_grad()
@@ -337,31 +320,3 @@ class GLoRAModule(LycorisBaseModule):
         # Norm before scale determined by alpha / r_factor
         unscaled_norm = self.make_weight(device).norm()
         return unscaled_norm
-
-    def ggpo_pertubation(self, x):
-        # Optimized perturbation generation based on module type
-        if self.module_type == "linear":
-            # More efficient scale calculation
-            perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
-            perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
-            
-            # For linear layers, use efficient matrix multiplication
-            perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
-            perturbation = perturbation * perturbation_scale_factor.view(-1, 1)
-            return x @ perturbation.T
-        elif self.module_type.startswith("conv") and self.ggpo_conv:
-            # More efficient scale calculation
-            perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
-            perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
-
-            # For convolution layers, generate efficient perturbation
-            perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
-            
-            # Apply scaling with efficient broadcasting
-            view_shape = [perturbation.shape[0]] + [1] * (len(perturbation.shape) - 1)
-            perturbation = perturbation * perturbation_scale_factor.view(*view_shape)
-            
-            # Use the appropriate convolution operation
-            return self.op(x, perturbation, None, **self.kw_dict)
-        else:
-            return None

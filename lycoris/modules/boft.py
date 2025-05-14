@@ -235,7 +235,7 @@ class ButterflyOFTModule(LycorisBaseModule):
         if diff:
             inp = inp - org
 
-        return inp.to(self.org_module[0].weight.dtype)
+        return inp.to(org_weight_dtype)
 
     def get_diff_weight(self, multiplier=1, shape=None, device=None):
         diff = self.make_weight(scale=multiplier, device=device, diff=True)
