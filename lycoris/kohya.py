@@ -740,6 +740,7 @@ class LycorisNetworkKohya(LycorisNetwork):
 
         return key_scaled, sum(norms) / len(norms), max(norms)
     
+    @torch.no_grad()
     def get_norms(self, device):
         unscaled_norms = []
         for module in self.unet_loras + self.text_encoder_loras:
