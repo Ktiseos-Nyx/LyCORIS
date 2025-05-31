@@ -880,7 +880,7 @@ class LycorisNetworkKohya(LycorisNetwork):
                 logger.warning(f"Not training {group_name_prefix} as LR is {str(current_lr)}.")
                 continue
 
-            lr_description = f"{comp_type}{comp_idx if comp_type == 'textencoder' else ''}{' plus' if is_lora_plus else ''}"
+            lr_description = f"{comp_type}{comp_idx if comp_type == 'textencoder' else ''}{' Ortho' if is_ortho_group else ''}{' plus' if is_lora_plus else ''}"
 
             group_dict = {
                 'params': params,
