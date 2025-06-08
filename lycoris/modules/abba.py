@@ -135,7 +135,7 @@ class AbbaModule(LycorisBaseModule):
             raise NotImplementedError
 
         if use_scalar:
-            self.scalar = nn.Parameter(torch.tensor(0.0))
+            self.scalar = nn.Parameter(torch.tensor(1.0))
         else:
             self.register_buffer("scalar", torch.tensor(1.0), persistent=False)
         
@@ -203,12 +203,9 @@ class AbbaModule(LycorisBaseModule):
         This is for compatibility with older saved models.
         """
         missing_keys = incompatible_keys.missing_keys
-        # Use a loop to safely remove all occurrences of 'scalar'
-        while any("scalar" in key for key in missing_keys):
-            for key in missing_keys:
-                if "scalar" in key:
-                    missing_keys.remove(key)
-                    break
+        for key in missing_keys:
+            if "scalar" in key:
+                del missing_keys[missing_keys.index(key)]
         
         # If scalar was baked into the weights, reset the module's scalar to 1.0
         if isinstance(self.scalar, nn.Parameter):
