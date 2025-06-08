@@ -14,6 +14,7 @@ import math
 
 from .utils import precalculate_safetensors_hashes
 from .wrapper import LycorisNetwork, network_module_dict, deprecated_arg_dict
+from .modules.abba import AbbaModule
 from .modules.locon import LoConModule
 from .modules.loha import LohaModule
 from .modules.ia3 import IA3Module

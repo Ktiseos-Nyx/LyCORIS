@@ -14,6 +14,7 @@ import torch.nn as nn
 import math
 
 from .utils import precalculate_safetensors_hashes
+from .modules.abba import AbbaModule
 from .modules.locon import LoConModule
 from .modules.loha import LohaModule
 from .modules.lokr import LokrModule
@@ -51,6 +52,7 @@ VALID_PRESET_KEYS = [
 
 
 network_module_dict = {
+    "abba": AbbaModule,
     "lora": LoConModule,
     "locon": LoConModule,
     "loha": LohaModule,

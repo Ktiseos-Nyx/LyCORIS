@@ -179,7 +179,7 @@ class LoConModule(LycorisBaseModule):
         module = cls(
             lora_name,
             orig_module,
-            1,
+            1.0,
             down.size(0),
             float(alpha),
             use_tucker=mid is not None,
