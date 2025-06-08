@@ -135,7 +135,7 @@ class AbbaModule(LycorisBaseModule):
             raise NotImplementedError
 
         if use_scalar:
-            self.scalar = nn.Parameter(torch.tensor(1.0))
+            self.scalar = nn.Parameter(torch.tensor(0.0))
         else:
             self.register_buffer("scalar", torch.tensor(1.0), persistent=False)
         
