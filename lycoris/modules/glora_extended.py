@@ -51,7 +51,6 @@ class GLoRAExtendedModule(LycorisBaseModule):
         dropout: float = 0.0,
         rank_dropout: float = 0.0,
         module_dropout: float = 0.0,
-        lora_dropout: float = 0.0,
         apply_d: bool = True,
         apply_e: bool = True,
         rs_lora: bool = False,
@@ -65,7 +64,6 @@ class GLoRAExtendedModule(LycorisBaseModule):
             dropout = dropout,
             rank_dropout = rank_dropout,
             module_dropout = module_dropout,
-            lora_dropout = lora_dropout,
             rank_dropout_scale = False,
             bypass_mode = False, # Must be False as bypass_forward is not implemented
             ggpo_beta = None,
@@ -76,7 +74,7 @@ class GLoRAExtendedModule(LycorisBaseModule):
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in GLoRAExtended.")
 
-        if (dropout > 0 or lora_dropout > 0):
+        if dropout > 0:
             log_glora_extended_drop()
 
         self.lora_dim = lora_dim
@@ -271,18 +269,6 @@ class GLoRAExtendedModule(LycorisBaseModule):
         x_eff = x
         if self.dropout > 0 and self.training:
             x_eff = self.drop(x_eff)
-
-        if self.lora_dropout > 0 and self.training:
-            input_mask_shape = [1] * x.dim()
-            last_dim_size = x.shape[1] if self.isconv and x.dim() > 2 else x.shape[-1]
-            if self.isconv and x.dim() > 2: input_mask_shape[1] = -1
-            else: input_mask_shape[-1] = -1
-
-            if last_dim_size > 0 :
-                input_mask = torch.bernoulli(
-                    torch.ones(last_dim_size, device=x.device, dtype=x.dtype) * (1 - self.lora_dropout)
-                ).view(*input_mask_shape)
-                x_eff = x_eff * input_mask
 
         return self.op(x_eff, merged_W, merged_B, **self.kw_dict)
 

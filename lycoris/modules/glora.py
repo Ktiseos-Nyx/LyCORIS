@@ -48,7 +48,6 @@ class GLoRAModule(LycorisBaseModule):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
-        lora_dropout=0.0,
         use_tucker=False,
         use_scalar=False,
         rank_dropout_scale=False,
@@ -72,7 +71,6 @@ class GLoRAModule(LycorisBaseModule):
             dropout,
             rank_dropout,
             module_dropout,
-            lora_dropout,
             rank_dropout_scale,
             bypass_mode,
             None,
@@ -86,7 +84,7 @@ class GLoRAModule(LycorisBaseModule):
         self.tucker = False
         self.rs_lora = rs_lora
 
-        if (dropout or lora_dropout) and not bypass_mode:
+        if dropout and not bypass_mode:
             log_glora_drop()
 
         if self.module_type.startswith("conv"):
@@ -231,13 +229,6 @@ class GLoRAModule(LycorisBaseModule):
 
     def _bypass_forward(self, x, scale=1, diff=False):
         scale = self.scale * scale
-
-        if self.lora_dropout:
-            input_mask = torch.bernoulli(
-                torch.ones(x.shape[-1], device=x.device) * (1 - self.lora_dropout)
-            ).to(x.dtype)
-            x = x * input_mask
-
         ax_mid = self.a2(x) * scale
         bx_mid = self.b2(x) * scale
 
@@ -290,12 +281,6 @@ class GLoRAModule(LycorisBaseModule):
             )
             if self.dropout:
                 x = self.drop(x)
-
-            if self.lora_dropout:
-                input_mask = torch.bernoulli(
-                    torch.ones(x.shape[-1], device=x.device) * (1 - self.lora_dropout)
-                ).to(x.dtype)
-                x = x * input_mask
 
             result = self.op(x, weight, bias, **self.kw_dict)
 

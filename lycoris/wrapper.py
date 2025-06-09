@@ -87,7 +87,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     dropout = float(kwargs.get("dropout", 0.0) or 0.0)
     rank_dropout = float(kwargs.get("rank_dropout", 0.0) or 0.0)
     module_dropout = float(kwargs.get("module_dropout", 0.0) or 0.0)
-    lora_dropout = float(kwargs.get("lora_dropout", None) or None)
     algo = (kwargs.get("algo", "lora") or "lora").lower()
     use_tucker = str_bool(
         not kwargs.get("disable_conv_cp", True)
@@ -149,9 +148,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     if full_matrix:
         logger.info("Full matrix mode for LoKr is enabled")
 
-    if lora_dropout is not None:
-        lora_dropout = float(lora_dropout)
-
     preset = kwargs.get("preset", "full")
     if preset not in PRESET:
         preset = read_preset(preset)
@@ -178,7 +174,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         dropout=dropout,
         rank_dropout=rank_dropout,
         module_dropout=module_dropout,
-        lora_dropout=lora_dropout,
         use_tucker=use_tucker,
         use_scalar=use_scalar,
         network_module=algo,
@@ -310,7 +305,6 @@ class LycorisNetwork(torch.nn.Module):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
-        lora_dropout=0.0,
         network_module: str = "locon",
         norm_modules=NormModule,
         train_norm=False,
@@ -326,7 +320,6 @@ class LycorisNetwork(torch.nn.Module):
         self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
-        self.lora_dropout = kwargs.get("lora_dropout", 0.0)
 
         self.wd_on_output = kwargs.get("wd_on_output", False)
 
@@ -342,9 +335,6 @@ class LycorisNetwork(torch.nn.Module):
         if self.ggpo_conv_weight_sample_size is not None:
             self.ggpo_conv_weight_sample_size = int(self.ggpo_conv_weight_sample_size)
 
-        if self.lora_dropout is not None:
-            self.lora_dropout  = float(self.lora_dropout)
-
         if init_only:
             self.multiplier = 1
             self.lora_dim = 0
@@ -354,7 +344,6 @@ class LycorisNetwork(torch.nn.Module):
             self.dropout = 0.0
             self.rank_dropout = 0
             self.module_dropout = 0
-            self.lora_dropout = 0,
             self.use_tucker = False
             self.loras = []
             self.algo_table = {}
@@ -381,16 +370,12 @@ class LycorisNetwork(torch.nn.Module):
         if 1 >= dropout >= 0:
             logger.info(f"Use Dropout value: {dropout}")
 
-        if 1 >= lora_dropout >= 0:
-            logger.info(f"Use LORA Dropout value: {lora_dropout}")
-
         if self.wd_on_output is not None:
             logger.info(f"wd_on_output={self.wd_on_output}")
 
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
-        self.lora_dropout = lora_dropout
 
         self.use_tucker = use_tucker
 
@@ -415,7 +400,6 @@ class LycorisNetwork(torch.nn.Module):
                     multiplier=self.multiplier,
                     rank_dropout=self.rank_dropout,
                     module_dropout=self.module_dropout,
-                    lora_dropout=0.0,
                     **kwargs,
                 )
             lora = None
@@ -445,7 +429,6 @@ class LycorisNetwork(torch.nn.Module):
                 self.dropout,
                 self.rank_dropout,
                 self.module_dropout,
-                self.lora_dropout,
                 use_tucker,
                 self.ggpo_beta,
                 self.ggpo_sigma,

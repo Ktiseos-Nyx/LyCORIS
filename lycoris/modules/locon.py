@@ -11,9 +11,6 @@ from ..logging import logger
 
 from typing import Optional
 
-from ..utils.general import lora_dropout_down, lora_dropout_up
-
-
 @cache
 def log_wd():
     return logger.warning(
@@ -49,7 +46,6 @@ class LoConModule(LycorisBaseModule):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
-        lora_dropout=0.0,
         use_tucker=False,
         use_scalar=False,
         rank_dropout_scale=False,
@@ -71,7 +67,6 @@ class LoConModule(LycorisBaseModule):
             dropout,
             rank_dropout,
             module_dropout,
-            lora_dropout,
             rank_dropout_scale,
             bypass_mode,
             ggpo_beta,
@@ -303,10 +298,7 @@ class LoConModule(LycorisBaseModule):
         return unscaled_norm
 
     def bypass_forward_diff(self, x, scale=1):
-        if self.lora_dropout is not None and self.training and self.lora_dropout > 0:
-            mid = lora_dropout_down(self.lora_down.weight, x, dropout_prob=self.lora_dropout)
-        else:
-            mid = self.lora_down(x)
+        mid = self.lora_down(x)
 
         if self.tucker:
             mid = self.lora_mid(mid)
@@ -323,10 +315,7 @@ class LoConModule(LycorisBaseModule):
                 drop = drop.view(*[1] * (dims - 1), -1)
             mid = mid * drop
 
-        if self.lora_dropout is not None and self.training and self.lora_dropout > 0:
-            up = lora_dropout_up(self.lora_up.weight, x, dropout_prob=self.lora_dropout)
-        else:
-            up = self.lora_up(mid)
+        up = self.lora_up(mid)
 
         return self.drop(up * self.scalar * self.scale * scale)
 
@@ -364,35 +353,19 @@ class LoConModule(LycorisBaseModule):
         dtype = self.dtype
         
         # Apply lora dropout during weight computation if enabled
-        if self.training and ((self.lora_dropout is not None and self.lora_dropout > 0 and not self.wd) or self.tucker or self.rank_dropout):
+        if (not self.wd and (self.tucker or self.rank_dropout)):
             # Get the lora weights
             wa = self.lora_up.weight.to(x.device).to(dtype)
             wb = self.lora_down.weight.to(x.device).to(dtype)
             
-            if self.training and self.lora_dropout is not None and self.lora_dropout > 0 and not self.wd:
-                # Generate dropout masks
-                up_mask = torch.bernoulli(
-                    torch.ones(wa.shape[0], device=x.device) * (1 - self.lora_dropout)
-                )
-                down_mask = torch.bernoulli(
-                    torch.ones(wb.shape[1], device=x.device) * (1 - self.lora_dropout)
-                )
-                
-                # Apply dropout masks (matching the pattern in lora_dropout_up/down)
-                wa_dropped = wa * up_mask.view(-1, 1)
-                wb_dropped = wb * down_mask.view(1, -1)
-            else:
-                wa_dropped = wa
-                wb_dropped = wb
-            
             # Compute the combined weight
             if self.tucker:
                 t = self.lora_mid.weight.to(x.device).to(dtype)
-                wa_dropped = wa_dropped.view(wa_dropped.size(0), -1).transpose(0, 1)
-                wb_dropped = wb_dropped.view(wb_dropped.size(0), -1)
-                diff_weight = rebuild_tucker(t, wa_dropped, wb_dropped)
+                wa = wa.view(wa.size(0), -1).transpose(0, 1)
+                wb = wb.view(wb.size(0), -1)
+                diff_weight = rebuild_tucker(t, wa, wb)
             else:
-                diff_weight = wa_dropped.view(wa_dropped.size(0), -1) @ wb_dropped.view(wb_dropped.size(0), -1)
+                diff_weight = wa.view(wa.size(0), -1) @ wb.view(wb.size(0), -1)
             
             # Apply additional processing
             diff_weight = diff_weight.view(self.shape)
@@ -415,20 +388,7 @@ class LoConModule(LycorisBaseModule):
         if self.wd:
             weight = self.apply_weight_decompose(weight + diff_weight, self.multiplier)
 
-            # Additionally apply lora dropout to input if enabled
-            if self.training and self.lora_dropout is not None and self.lora_dropout > 0:
-                # For weight decomposition, apply the lora dropout directly to input dimensions
-                # This creates a mask for input features that simulates the effect of lora_dropout_down
-                input_mask = torch.bernoulli(
-                    torch.ones(x.shape[-1], device=x.device) * (1 - self.lora_dropout)
-                ).to(x.dtype)
-                
-                # Apply mask to the input - this affects which input features contribute to the output
-                x = x * input_mask
-                
-                # Note: We don't need to simulate lora_dropout_up here because the weight_decompose 
-                # approach already handles the output feature scaling differently
-
+            # Input dropout for DoRA
             x = self.drop(x)
         else:
             weight = weight + diff_weight * self.multiplier
