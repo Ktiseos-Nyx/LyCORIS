@@ -1,5 +1,6 @@
 # abba.py
 import math
+from functools import cache
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +10,12 @@ from ..logging import logger
 
 from typing import Optional
 
+@cache
+def log_wd():
+    return logger.warning(
+        "Using weight_decompose=True with LoRA (DoRA) will cause network dropout to be applied to the forward input, "
+        "instead of to the layers, as per the DoRA paper."
+    )
 
 class AbbaModule(LycorisBaseModule):
     """
@@ -31,6 +38,7 @@ class AbbaModule(LycorisBaseModule):
         "lora_up2.weight",
         "lora_down2.weight",
         "alpha",
+        "dora_scale",
     ]
     # Use a deterministic set of weights to identify this module type from a state dict
     weight_list_det = ["lora_up1.weight", "lora_up2.weight"]
@@ -92,25 +100,16 @@ class AbbaModule(LycorisBaseModule):
                 f"The module will be inactive."
             )
 
-        # In ABBA, alpha is used to derive a single scaling factor.
-        alpha = lora_dim if alpha is None or alpha == 0 else alpha
-        self.register_buffer("alpha", torch.tensor(float(alpha)))
-
-        # Scaling factor from ABBA Paper, Theorem 2
-        # s_ABBA = alpha_LORA**2 / sqrt(r1 * r2)
-        if self.r1 > 0 and self.r2 > 0:
-            self.scale = alpha**2 / math.sqrt(self.r1 * self.r2)
-        else:
-            self.scale = 0.0
-
         if self.module_type.startswith("conv"):
             self.isconv = True
+            # For general LoCon
             in_dim = org_module.in_channels
-            out_dim = org_module.out_channels
             k_size = org_module.kernel_size
             stride = org_module.stride
             padding = org_module.padding
-
+            out_dim = org_module.out_channels
+            self.down_op = self.op
+            self.up_op = self.op
             # Following LoCon, the 'down' layers have the full kernel, 'up' are 1x1 convs
             self.lora_down1 = self.module(in_dim, self.r1, k_size, stride, padding, bias=False)
             self.lora_up1 = self.module(self.r1, out_dim, 1, bias=False)
@@ -119,6 +118,8 @@ class AbbaModule(LycorisBaseModule):
 
         elif self.module_type == "linear":
             self.isconv = False
+            self.down_op = F.linear
+            self.up_op = F.linear
             in_dim = org_module.in_features
             out_dim = org_module.out_features
             self.lora_down1 = nn.Linear(in_dim, self.r1, bias=False)
@@ -131,7 +132,49 @@ class AbbaModule(LycorisBaseModule):
 
         else:
             raise NotImplementedError
+        
+        self.wd = weight_decompose
+        self.wd_on_output = wd_on_output
+        if self.wd:
+            org_weight = org_module.weight.cpu().clone().float()
+            self.dora_norm_dims = org_weight.dim() - 1
+            if self.wd_on_output:
+                self.dora_scale = nn.Parameter(
+                    torch.norm(
+                        org_weight.reshape(org_weight.shape[0], -1),
+                        dim=1,
+                        keepdim=True,
+                    ).reshape(org_weight.shape[0], *[1] * self.dora_norm_dims)
+                ).float()
+            else:
+                self.dora_scale = nn.Parameter(
+                    torch.norm(
+                        org_weight.transpose(1, 0).reshape(org_weight.shape[1], -1),
+                        dim=1,
+                        keepdim=True,
+                    )
+                    .reshape(org_weight.shape[1], *[1] * self.dora_norm_dims)
+                    .transpose(1, 0)
+                ).float()
 
+        
+        if dropout and self.wd:
+            log_wd()
+
+        # In ABBA, alpha is used to derive a single scaling factor.
+
+        if type(alpha) == torch.Tensor:
+            alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
+        alpha = lora_dim if alpha is None or alpha == 0 else alpha
+        self.register_buffer("alpha", torch.tensor(float(alpha)))
+
+        # Scaling factor from ABBA Paper, Theorem 2
+        # s_ABBA = alpha_LORA**2 / sqrt(r1 * r2)
+        if self.r1 > 0 and self.r2 > 0:
+            self.scale = alpha**2 / math.sqrt(self.r1 * self.r2)
+        else:
+            self.scale = 0.0
+        
         if use_scalar:
             self.scalar = nn.Parameter(torch.tensor(1.0))
         else:
@@ -176,7 +219,7 @@ class AbbaModule(LycorisBaseModule):
         torch.nn.init.constant_(self.lora_up2.weight, 0)
 
     @classmethod
-    def make_module_from_state_dict(cls, lora_name, orig_module, up1, down1, up2, down2, alpha):
+    def make_module_from_state_dict(cls, lora_name, orig_module, up1, down1, up2, down2, alpha, dora_scale):
         """
         Creates an AbbaModule from a state dictionary.
         """
@@ -186,13 +229,18 @@ class AbbaModule(LycorisBaseModule):
             orig_module,
             1.0,
             lora_dim=lora_dim,
-            alpha=float(alpha)
+            alpha=float(alpha),
+            use_tucker=False,
+            weight_decompose=dora_scale is not None,
         )
         # Manually copy weights instead of re-initializing
         module.lora_up1.weight.data.copy_(up1)
         module.lora_down1.weight.data.copy_(down1)
         module.lora_up2.weight.data.copy_(up2)
         module.lora_down2.weight.data.copy_(down2)
+
+        if dora_scale is not None:
+            module.dora_scale.copy_(dora_scale)
         return module
 
     def load_weight_hook(self, module: nn.Module, incompatible_keys):
@@ -220,6 +268,9 @@ class AbbaModule(LycorisBaseModule):
         The 'scalar' is baked into the lora_up weights for simplicity and symmetry.
         """
         destination = {}
+
+        if self.wd:
+            destination["dora_scale"] = self.dora_scale
         destination["alpha"] = self.alpha
         
         # Symmetrically bake the sqrt of the scalar into both up weights.
@@ -309,8 +360,13 @@ class AbbaModule(LycorisBaseModule):
         """
         Returns the full merged weight (original + scaled difference).
         """
-        diff_weight, _ = self.get_diff_weight(multiplier, shape, device)
-        return self.org_weight + diff_weight, None
+        diff, _ = self.get_diff_weight(multiplier, shape, device)
+        weight = self.org_weight
+        if self.wd:
+            merged = self.apply_weight_decompose(weight + diff, multiplier)
+        else:
+            merged = weight + diff * multiplier
+        return merged, None
 
     def bypass_forward_diff(self, x, scale=1):
         """
@@ -355,11 +411,35 @@ class AbbaModule(LycorisBaseModule):
         if self.bypass_mode:
             return self.org_forward(x) + self.bypass_forward_diff(x, self.multiplier)
         else:
-            # Rebuild mode: merge weights on-the-fly
-            merged_weight, _ = self.get_merged_weight(self.multiplier, device=x.device)
-            bias = self.org_module[0].bias
-            return self.op(x, merged_weight, bias, **self.kw_dict)
-        
+            if self.wd:
+                # Rebuild mode: merge weights on-the-fly
+                merged_weight, _ = self.get_merged_weight(self.multiplier, device=x.device)
+
+                bias = self.org_module[0].bias
+                return self.op(self.drop(x), merged_weight, bias, **self.kw_dict)
+            elif self.dropout:
+                # 1. Get the original module's output
+                # self.org_forward(x) correctly calls the original layer's forward pass.
+                base_output = self.org_forward(x)
+
+                # 2. Calculate the LoRA delta output
+                diff_weight = self.make_weight(x.device).to(self.dtype)
+                
+                # The delta path has no bias.
+                delta_output = self.op(x, diff_weight, None, **self.kw_dict)
+
+                # 3. Apply scaling, multiplier, and network dropout to the delta output
+                # This mirrors the logic in bypass_forward_diff
+                final_delta = self.drop(delta_output * self.scale * self.multiplier)
+                
+                # 4. Return the sum
+                return base_output + final_delta
+            else:
+                # Rebuild mode: merge weights on-the-fly
+                merged_weight, _ = self.get_merged_weight(self.multiplier, device=x.device)
+                bias = self.org_module[0].bias
+                return self.op(x, merged_weight, bias, **self.kw_dict)
+
     @torch.no_grad()
     def apply_max_norm(self, max_norm, device=None):
         orig_norm = self.make_weight(device).norm() * self.scale
@@ -379,3 +459,54 @@ class AbbaModule(LycorisBaseModule):
         # Norm before scale determined by alpha / r_factor
         unscaled_norm = self.make_weight(device).norm() * self.scale
         return unscaled_norm
+    
+    def apply_weight_decompose(self, weight, multiplier=1):
+        weight = weight.to(self.dora_scale.dtype)
+        if self.wd_on_output:
+            weight_norm = (
+                weight.reshape(weight.shape[0], -1)
+                .norm(dim=1)
+                .reshape(weight.shape[0], *[1] * self.dora_norm_dims)
+            ) + torch.finfo(weight.dtype).eps
+        else:
+            weight_norm = (
+                weight.transpose(0, 1)
+                .reshape(weight.shape[1], -1)
+                .norm(dim=1, keepdim=True)
+                .reshape(weight.shape[1], *[1] * self.dora_norm_dims)
+                .transpose(0, 1)
+            ) + torch.finfo(weight.dtype).eps
+
+        scale = self.dora_scale.to(weight.device) / weight_norm
+        if multiplier != 1:
+            scale = multiplier * (scale - 1) + 1
+
+        return weight * scale
+    
+    def ggpo_pertubation(self, x):
+        # Optimized perturbation generation based on module type
+        if self.module_type == "linear":
+            # More efficient scale calculation
+            perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
+            perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
+            
+            # For linear layers, use efficient matrix multiplication
+            perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
+            perturbation = perturbation * perturbation_scale_factor.view(-1, 1)
+            return x @ perturbation.T
+        elif self.module_type.startswith("conv") and self.ggpo_conv:
+            # More efficient scale calculation
+            perturbation_scale = (self.ggpo_sigma * torch.sqrt(self.combined_weight_norms**2)) + (self.ggpo_beta * (self.grad_norms**2))
+            perturbation_scale_factor = (perturbation_scale * self.perturbation_norm_factor).to(self.device)
+
+            # For convolution layers, generate efficient perturbation
+            perturbation = torch.randn(self.org_module_shape, dtype=self.dtype, device=self.device)
+            
+            # Apply scaling with efficient broadcasting
+            view_shape = [perturbation.shape[0]] + [1] * (len(perturbation.shape) - 1)
+            perturbation = perturbation * perturbation_scale_factor.view(*view_shape)
+            
+            # Use the appropriate convolution operation
+            return self.op(x, perturbation, None, **self.kw_dict)
+        else:
+            return None
