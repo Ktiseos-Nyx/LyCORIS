@@ -28,7 +28,6 @@ algos: list[str] = [
     "diag-oft",
     "boft",
     "glora",
-    "glora-ex",
     "ia3",
 ]
 if torch.cuda.is_available():

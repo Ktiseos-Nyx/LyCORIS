@@ -59,7 +59,6 @@ network_module_dict = {
     "lokr": LokrModule,
     "dylora": DyLoraModule,
     "glora": GLoRAModule,
-    "glora-ex": GLoRAExtendedModule,
     "full": FullModule,
     "diag-oft": DiagOFTModule,
     "boft": ButterflyOFTModule,
