@@ -35,7 +35,7 @@ import warnings
 
 from collections import defaultdict
 
-LORA_PLUS_TARGETS = ["lora_up","a2","b2"]
+LORA_PLUS_TARGETS = ["lora_up","a1","b1"]
 
 
 def create_network(
