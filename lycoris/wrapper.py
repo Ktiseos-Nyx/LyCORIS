@@ -14,11 +14,13 @@ import torch.nn as nn
 import math
 
 from .utils import precalculate_safetensors_hashes
+from .modules.abba import AbbaModule
 from .modules.locon import LoConModule
 from .modules.loha import LohaModule
 from .modules.lokr import LokrModule
 from .modules.dylora import DyLoraModule
 from .modules.glora import GLoRAModule
+from .modules.glora_extended import GLoRAExtendedModule
 from .modules.norms import NormModule
 from .modules.full import FullModule
 from .modules.diag_oft import DiagOFTModule
@@ -50,6 +52,7 @@ VALID_PRESET_KEYS = [
 
 
 network_module_dict = {
+    "abba": AbbaModule,
     "lora": LoConModule,
     "locon": LoConModule,
     "loha": LohaModule,
@@ -83,8 +86,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     dropout = float(kwargs.get("dropout", 0.0) or 0.0)
     rank_dropout = float(kwargs.get("rank_dropout", 0.0) or 0.0)
     module_dropout = float(kwargs.get("module_dropout", 0.0) or 0.0)
-    lora_dropout = float(kwargs.get("lora_dropout", 0.0) or 0.0)
-    aid_dropout = float(kwargs.get("aid_dropout", 0.0) or 0.0)
     algo = (kwargs.get("algo", "lora") or "lora").lower()
     use_tucker = str_bool(
         not kwargs.get("disable_conv_cp", True)
@@ -103,6 +104,10 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     bypass_mode = str_bool(kwargs.get("bypass_mode", False))
     rs_lora = str_bool(kwargs.get("rs_lora", False))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
+    torch_compile = str_bool(kwargs.get("torch_compile", False))
+    torch_compile_mode = kwargs.get("torch_compile_mode", "max-autotune")
+    torch_compile_dynamic = str_bool(kwargs.get("torch_compile_dynamic", False))
+    torch_compile_fullgraph = str_bool(kwargs.get("torch_compile_fullgraph", True))
 
     ggpo_beta = kwargs.get("ggpo_beta", None)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
@@ -142,12 +147,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     if full_matrix:
         logger.info("Full matrix mode for LoKr is enabled")
 
-    if lora_dropout is not None:
-        lora_dropout = float(lora_dropout)
-
-    if aid_dropout is not None:
-        aid_dropout = float(aid_dropout)
-
     preset = kwargs.get("preset", "full")
     if preset not in PRESET:
         preset = read_preset(preset)
@@ -157,6 +156,12 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     LycorisNetwork.apply_preset(preset)
 
     logger.info(f"Using rank adaptation algo: {algo}")
+
+    if torch_compile:
+        logger.info(f"Torch compile enabled for network.\n \
+                    dynamic={torch_compile_dynamic}\n \
+                    mode={torch_compile_mode}\n \
+                    fullgraph={torch_compile_fullgraph}")
 
     network = LycorisNetwork(
         module,
@@ -168,7 +173,6 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         dropout=dropout,
         rank_dropout=rank_dropout,
         module_dropout=module_dropout,
-        lora_dropout=lora_dropout,
         use_tucker=use_tucker,
         use_scalar=use_scalar,
         network_module=algo,
@@ -179,7 +183,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         constraint=constraint,
         rescaled=rescaled,
         weight_decompose=weight_decompose,
-        wd_on_out=wd_on_output,
+        wd_on_output=wd_on_output,
         full_matrix=full_matrix,
         bypass_mode=bypass_mode,
         rs_lora=rs_lora,
@@ -189,7 +193,11 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
     )
 
-    return network
+    if torch_compile:
+        with torch._dynamo.utils.disable_cache_limit():
+            return torch.compile(network, dynamic=torch_compile_dynamic, mode=torch_compile_mode, fullgraph=torch_compile_fullgraph)
+    else:
+        return network
 
 
 def create_lycoris_from_weights(multiplier, file, module, weights_sd=None, **kwargs):
@@ -296,8 +304,6 @@ class LycorisNetwork(torch.nn.Module):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
-        lora_dropout=0.0,
-        aid_dropout=0.0,
         network_module: str = "locon",
         norm_modules=NormModule,
         train_norm=False,
@@ -313,8 +319,6 @@ class LycorisNetwork(torch.nn.Module):
         self.ggpo_sigma = kwargs.get("ggpo_sigma", None)
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
-        self.lora_dropout = kwargs.get("lora_dropout", 0.0)
-        self.aid_dropout = kwargs.get("aid_dropout", 0.0)
 
         self.wd_on_output = kwargs.get("wd_on_output", False)
 
@@ -330,22 +334,15 @@ class LycorisNetwork(torch.nn.Module):
         if self.ggpo_conv_weight_sample_size is not None:
             self.ggpo_conv_weight_sample_size = int(self.ggpo_conv_weight_sample_size)
 
-        if self.lora_dropout is not None:
-            self.lora_dropout  = float(self.lora_dropout)
-
-        if self.aid_dropout is not None:
-            self.aid_dropout  = float(self.aid_dropout)
-
         if init_only:
             self.multiplier = 1
             self.lora_dim = 0
             self.alpha = 1
             self.conv_lora_dim = 0
             self.conv_alpha = 1
-            self.dropout = 0
+            self.dropout = 0.0
             self.rank_dropout = 0
             self.module_dropout = 0
-            self.lora_dropout = 0,
             self.use_tucker = False
             self.loras = []
             self.algo_table = {}
@@ -372,20 +369,12 @@ class LycorisNetwork(torch.nn.Module):
         if 1 >= dropout >= 0:
             logger.info(f"Use Dropout value: {dropout}")
 
-        if 1 >= lora_dropout >= 0:
-            logger.info(f"Use LORA Dropout value: {lora_dropout}")
-
-        if 1 >= aid_dropout >= 0:
-            logger.info(f"Use AID Dropout value: {aid_dropout}")
-
         if self.wd_on_output is not None:
             logger.info(f"wd_on_output={self.wd_on_output}")
 
         self.dropout = dropout
         self.rank_dropout = rank_dropout
         self.module_dropout = module_dropout
-        self.lora_dropout = lora_dropout
-        self.aid_dropout = aid_dropout
 
         self.use_tucker = use_tucker
 
@@ -405,13 +394,11 @@ class LycorisNetwork(torch.nn.Module):
 
             if train_norm and "Norm" in module.__class__.__name__:
                 return norm_modules(
-                    lora_name,
-                    module,
-                    self.multiplier,
-                    self.rank_dropout,
-                    self.module_dropout,
-                    self.lora_dropout,
-                    self.aid_dropout,
+                    lora_name=lora_name,
+                    org_module=module,
+                    multiplier=self.multiplier,
+                    rank_dropout=self.rank_dropout,
+                    module_dropout=self.module_dropout,
                     **kwargs,
                 )
             lora = None
@@ -441,8 +428,6 @@ class LycorisNetwork(torch.nn.Module):
                 self.dropout,
                 self.rank_dropout,
                 self.module_dropout,
-                self.lora_dropout,
-                self.aid_dropout,
                 use_tucker,
                 self.ggpo_beta,
                 self.ggpo_sigma,
@@ -667,6 +652,14 @@ class LycorisNetwork(torch.nn.Module):
         for lora in self.loras:
             lora.merge_to(weight)
 
+    def onfly_merge(self, weight=1.0):
+        for lora in self.loras:
+            lora.onfly_merge(weight)
+
+    def onfly_restore(self):
+        for lora in self.loras:
+            lora.onfly_restore()
+
     def apply_max_norm_regularization(self, max_norm_value, device):
         key_scaled = 0
         norms = []
@@ -679,17 +672,15 @@ class LycorisNetwork(torch.nn.Module):
 
         return key_scaled, sum(norms) / len(norms), max(norms)
     
+    @torch.no_grad()
     def get_norms(self, device):
-        scaled_norms = []
         unscaled_norms = []
         for module in self.loras:
-            unscaled_norm, scaled_norm = module.get_norm(device)
-            if not (unscaled_norm is None or np.isnan(unscaled_norm) or np.isinf(unscaled_norm)):
+            unscaled_norm = module.get_norm(device)
+            if isinstance(unscaled_norm, torch.Tensor):
                 unscaled_norms.append(unscaled_norm)
-            if not (scaled_norm is None or np.isnan(scaled_norm) or np.isinf(scaled_norm)):
-                scaled_norms.append(scaled_norm)
 
-        return unscaled_norms, scaled_norms
+        return torch.stack(unscaled_norms)
 
     def enable_gradient_checkpointing(self):
         # not supported
@@ -775,15 +766,15 @@ class LycorisNetwork(torch.nn.Module):
             if hasattr(lora, "grad_norms") and lora.grad_norms is not None:
                 # Take mean of each module's gradient norms to get a scalar
                 try:
-                    module_norm = lora.grad_norms.mean().item()
-                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                    module_norm = lora.grad_norms.mean()
+                    if isinstance(module_norm, torch.Tensor):
                         all_norms.append(module_norm)
                 except:
                     # Skip problematic modules
                     continue
         
         # Create tensor from scalars (very efficient)
-        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        result = torch.stack(all_norms) if all_norms else torch.tensor([])
         
         # Cache the result
         self._cached_grad_norms = result
@@ -803,15 +794,15 @@ class LycorisNetwork(torch.nn.Module):
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "weight_norms") and lora.weight_norms is not None:
                 try:
-                    module_norm = lora.weight_norms.mean().item()
-                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                    module_norm = lora.weight_norms.mean()
+                    if isinstance(module_norm, torch.Tensor):
                         all_norms.append(module_norm)
                 except:
                     # Skip problematic modules
                     continue
         
         # Create tensor from scalars
-        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        result = torch.stack(all_norms) if all_norms else torch.tensor([])
         
         # Cache the result
         self._cached_weight_norms = result
@@ -831,15 +822,15 @@ class LycorisNetwork(torch.nn.Module):
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "combined_weight_norms") and lora.combined_weight_norms is not None:
                 try:
-                    module_norm = lora.combined_weight_norms.mean().item()
-                    if not (math.isnan(module_norm) or math.isinf(module_norm)):
+                    module_norm = lora.combined_weight_norms.mean()
+                    if isinstance(module_norm, torch.Tensor):
                         all_norms.append(module_norm)
                 except:
                     # Skip problematic modules
                     continue
         
         # Create tensor from scalars
-        result = torch.tensor(all_norms) if all_norms else torch.tensor([])
+        result = torch.stack(all_norms) if all_norms else torch.tensor([])
         
         # Cache the result
         self._cached_combined_norms = result
@@ -902,4 +893,4 @@ class LycorisNetwork(torch.nn.Module):
         # # Calculate GNS using provided gradient norm squared
         # gradient_noise_scale = trace_cov / grad_norm_squared
 
-        return gradient_noise_scale.item(), variance.item()
+        return gradient_noise_scale, variance

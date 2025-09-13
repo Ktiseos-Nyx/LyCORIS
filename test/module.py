@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from lycoris.modules import (
     LycorisBaseModule,
+    AbbaModule,
     LoConModule,
     LohaModule,
     LokrModule,
@@ -14,12 +15,14 @@ from lycoris.modules import (
     DiagOFTModule,
     ButterflyOFTModule,
     GLoRAModule,
+    GLoRAExtendedModule,
     DyLoraModule,
     IA3Module,
 )
 
 
 modules: list[LycorisBaseModule] = [
+    AbbaModule,
     LoConModule,
     LohaModule,
     LokrModule,
@@ -27,6 +30,7 @@ modules: list[LycorisBaseModule] = [
     DiagOFTModule,
     ButterflyOFTModule,
     GLoRAModule,
+    GLoRAExtendedModule,
     DyLoraModule,
     IA3Module,
 ]

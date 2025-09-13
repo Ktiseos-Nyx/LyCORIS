@@ -1,13 +1,23 @@
 import math
+from functools import cache
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import LycorisBaseModule
-from ..functional import tucker_weight_from_conv
+from ..functional.general import tucker_weight_from_conv
+from ..logging import logger
 
-from typing import Optional
+from .base import LycorisBaseModule
+
+@cache
+def log_glora_drop():
+    return logger.warning(
+        "Using GLoRA with bypass_mode=False will result in network or LoRA dropout " \
+        "being applied to the forward input instead of the layers. Requiring much lower values for dropout." \
+        "Note: Bypass mode may not behave the same, so test and compare if desired."
+    )
 
 
 class GLoRAModule(LycorisBaseModule):
@@ -38,16 +48,13 @@ class GLoRAModule(LycorisBaseModule):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
-        lora_dropout=0.0,
-        aid_dropout=0.0,
         use_tucker=False,
         use_scalar=False,
         rank_dropout_scale=False,
         weight_decompose=False,
+        wd_on_output=False,
         bypass_mode=None,
         rs_lora=False,
-        ggpo_beta: Optional[float] = None,
-        ggpo_sigma: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -64,18 +71,21 @@ class GLoRAModule(LycorisBaseModule):
             dropout,
             rank_dropout,
             module_dropout,
-            lora_dropout,
-            aid_dropout,
             rank_dropout_scale,
             bypass_mode,
-            ggpo_beta,
-            ggpo_sigma
+            None,
+            None,
+            False,
+            0
         )
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in GLoRA algo.")
         self.lora_dim = lora_dim
         self.tucker = False
         self.rs_lora = rs_lora
+
+        if dropout and not bypass_mode:
+            log_glora_drop()
 
         if self.module_type.startswith("conv"):
             self.isconv = True
@@ -191,7 +201,7 @@ class GLoRAModule(LycorisBaseModule):
     def make_weight(self, device=None):
         wa1 = self.a1.weight.view(self.a1.weight.size(0), -1)
         wa2 = self.a2.weight.view(self.a2.weight.size(0), -1)
-        orig = self.org_weight
+        orig = self.org_weight.to(dtype=wa1.dtype)
 
         if self.tucker:
             wb = tucker_weight_from_conv(self.b1.weight, self.b2.weight, self.bm.weight)
@@ -269,4 +279,29 @@ class GLoRAModule(LycorisBaseModule):
                 if self.org_module[0].bias is None
                 else self.org_module[0].bias.data
             )
-            return self.op(x, weight, bias, **self.kw_dict)
+            if self.dropout:
+                x = self.drop(x)
+
+            result = self.op(x, weight, bias, **self.kw_dict)
+
+            return result
+        
+    @torch.no_grad()
+    def apply_max_norm(self, max_norm, device=None):
+        orig_norm = self.make_weight(device).norm() * self.scale
+        norm = torch.clamp(orig_norm, max_norm / 2)
+        desired = torch.clamp(norm, max=max_norm)
+        ratio = desired.cpu() / norm.cpu()
+
+        scaled = norm != desired
+        if scaled:
+            self.scalar *= ratio
+            return scaled, orig_norm * ratio
+        else:
+            return 0, orig_norm
+
+    @torch.no_grad()
+    def get_norm(self, device=None):
+        # Norm before scale determined by alpha / r_factor
+        unscaled_norm = self.make_weight(device).norm()
+        return unscaled_norm

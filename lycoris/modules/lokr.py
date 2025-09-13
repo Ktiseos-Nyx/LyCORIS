@@ -54,15 +54,13 @@ class LokrModule(LycorisBaseModule):
         dropout=0.0,
         rank_dropout=0.0,
         module_dropout=0.0,
-        lora_dropout=0.0,
-        aid_dropout=0.0,
         use_tucker=False,
         use_scalar=False,
         decompose_both=False,
         factor: int = -1,  # factorization factor
         rank_dropout_scale=False,
         weight_decompose=False,
-        wd_on_out=False,
+        wd_on_output=False,
         full_matrix=False,
         bypass_mode=None,
         rs_lora=False,
@@ -78,8 +76,6 @@ class LokrModule(LycorisBaseModule):
             dropout,
             rank_dropout,
             module_dropout,
-            lora_dropout,
-            aid_dropout,
             rank_dropout_scale,
             bypass_mode,
             ggpo_beta,
@@ -183,11 +179,11 @@ class LokrModule(LycorisBaseModule):
                 self.lokr_w2 = nn.Parameter(torch.empty(shape[0][1], shape[1][1]))
 
         self.wd = weight_decompose
-        self.wd_on_out = wd_on_out
+        self.wd_on_output = wd_on_output
         if self.wd:
             org_weight = org_module.weight.cpu().clone().float()
             self.dora_norm_dims = org_weight.dim() - 1
-            if self.wd_on_out:
+            if self.wd_on_output:
                 self.dora_scale = nn.Parameter(
                     torch.norm(
                         org_weight.reshape(org_weight.shape[0], -1),
@@ -212,7 +208,6 @@ class LokrModule(LycorisBaseModule):
         self.rank_dropout = rank_dropout
         self.rank_dropout_scale = rank_dropout_scale
         self.module_dropout = module_dropout
-        self.lora_dropout = lora_dropout
 
         if isinstance(alpha, torch.Tensor):
             alpha = alpha.detach().float().numpy()  # without casting, bf16 causes error
@@ -409,7 +404,7 @@ class LokrModule(LycorisBaseModule):
 
     def apply_weight_decompose(self, weight, multiplier=1):
         weight = weight.to(self.dora_scale.dtype)
-        if self.wd_on_out:
+        if self.wd_on_output:
             weight_norm = (
                 weight.reshape(weight.shape[0], -1)
                 .norm(dim=1)
@@ -480,10 +475,8 @@ class LokrModule(LycorisBaseModule):
     @torch.no_grad()
     def get_norm(self, device=None):
         weight = self.get_weight(self.shape)
-        # Unscaled and scaled are the same for lokr(?)
         unscaled_norm = weight.norm()
-        scaled_norm = weight.norm()
-        return unscaled_norm.item(), scaled_norm.item()
+        return unscaled_norm
 
     def bypass_forward_diff(self, h, scale=1):
         is_conv = self.module_type.startswith("conv")

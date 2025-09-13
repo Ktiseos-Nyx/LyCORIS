@@ -75,16 +75,14 @@ class LycorisBaseModule(ModuleCustomSD):
 
     def __init__(
         self,
-        lora_name,
+        lora_name: str,
         org_module: nn.Module,
-        multiplier=1.0,
-        dropout=0.0,
-        rank_dropout=0.0,
-        module_dropout=0.0,
-        lora_dropout=0.0,
-        aid_dropout=0.0,
-        rank_dropout_scale=False,
-        bypass_mode=None,
+        multiplier: float = 1.0,
+        dropout: float = 0.0,
+        rank_dropout: float = 0.0,
+        module_dropout: float = 0.0,
+        rank_dropout_scale: bool = False,
+        bypass_mode: bool = False,
         ggpo_beta: Optional[float] = None,
         ggpo_sigma: Optional[float] = None,
         ggpo_conv: bool = False,
@@ -193,8 +191,6 @@ class LycorisBaseModule(ModuleCustomSD):
         self.rank_dropout = rank_dropout
         self.rank_dropout_scale = rank_dropout_scale
         self.module_dropout = module_dropout
-        self.lora_dropout = lora_dropout
-        self.aid_dropout = aid_dropout
 
         ## Dropout things
         # Since LoKr/LoHa/OFT/BOFT are hard to follow the rank_dropout definition from kohya
@@ -207,7 +203,6 @@ class LycorisBaseModule(ModuleCustomSD):
         self.rank_drop = (
             nn.Identity() if rank_dropout == 0 else nn.Dropout(rank_dropout)
         )
-        self.aid_drop = nn.Identity() if aid_dropout == 0 else AID(dropout_prob=self.aid_dropout)  # AID activation
 
         self.multiplier = multiplier
         self.org_forward = org_module.forward
@@ -312,6 +307,38 @@ class LycorisBaseModule(ModuleCustomSD):
                 self.org_module[0].bias = nn.Parameter(bias)
         self.to(self_device, self_dtype)
 
+    def onfly_merge(self, multiplier=1.0):
+        if self.not_supported:
+            return
+        self_device = next(self.parameters()).device
+        self_dtype = next(self.parameters()).dtype
+        self.to(self.org_weight)
+        self.cached_org_weight = self.org_weight.data.cpu()
+        self.cached_org_bias = None
+        weight, bias = self.get_merged_weight(
+            multiplier, self.org_weight.shape, self.org_weight.device
+        )
+        self.org_weight = weight
+        if bias is not None:
+            bias = bias.to(self.org_weight)
+            if self.org_module[0].bias is not None:
+                self.org_module[0].bias.data.copy_(bias)
+                self.cached_org_bias = self.org_module[0].bias.data.cpu()
+            else:
+                self.org_module[0].bias = nn.Parameter(bias)
+        if self.org_module[0].bias is not None:
+            self.org_module[0].bias = self.org_module[0].bias.to(self.org_weight)
+        self.to(self_device, self_dtype)
+
+    def onfly_restore(self):
+        if self.not_supported:
+            return
+        self.org_weight = self.cached_org_weight.to(self.org_weight)
+        if self.cached_org_bias is not None:
+            self.org_module[0].bias.data.copy_(self.cached_org_bias.to(self.org_weight))
+        del self.cached_org_weight
+        del self.cached_org_bias
+
     def get_diff_weight(self, multiplier=1.0, shape=None, device=None):
         raise NotImplementedError
 
@@ -408,7 +435,13 @@ class LycorisBaseModule(ModuleCustomSD):
         if self.ggpo_beta is None or self.ggpo_sigma is None or not self.training:
             return
         
-        if self.module_type != "linear" and not self.ggpo_conv:
+        if not(self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)):
+            return
+        
+        if not (hasattr(self, 'lora_down') and hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None):
+            return
+        
+        if not (hasattr(self, 'lora_up') and hasattr(self.lora_up, 'weight') and self.lora_down.weight.grad is not None):
             return
         
         # Skip update every other step for convolutions to reduce overhead
@@ -433,87 +466,70 @@ class LycorisBaseModule(ModuleCustomSD):
             total_norm = up_channel_norms.sum()
             
             # Avoid division by zero and normalize
-            if total_norm > 0:
-                self.weight_norms = up_channel_norms * (effect / total_norm)
-                self.combined_weight_norms = torch.sqrt(
-                    (self.org_weight_norm_estimate**2) + self.weight_norms**2
-                )
-            else:
-                # Fallback
-                out_size = self.lora_up.weight.size(0)
-                self.weight_norms = torch.ones(out_size, 1, device=self.device) * (effect / out_size)
-                self.combined_weight_norms = torch.sqrt(
-                    (self.org_weight_norm_estimate**2) + self.weight_norms**2
-                )
+            self.weight_norms = up_channel_norms * (effect / total_norm)
+            self.combined_weight_norms = torch.sqrt(
+                (self.org_weight_norm_estimate**2) + self.weight_norms**2
+            )
             return
         
-        if self.ggpo_conv:
+        if self.module_type.startswith("conv") and self.ggpo_conv:
             # Handle convolution layers - use sampling for efficiency
-            try:
-                # Sample-based estimation for convolution layers
-                out_size = self.lora_up.weight.size(0)
+            # Sample-based estimation for convolution layers
+            out_size = self.lora_up.weight.size(0)
+            
+            # Use a constant estimation factor based on typical CNN properties
+            # This avoids expensive reconstruction while capturing essential scaling
+            if not hasattr(self, 'conv_norm_estimate'):
+                # Cache this value since it's relatively constant
+                up = self.lora_up.weight
+                down = self.lora_down.weight
                 
-                # Use a constant estimation factor based on typical CNN properties
-                # This avoids expensive reconstruction while capturing essential scaling
-                if not hasattr(self, 'conv_norm_estimate'):
-                    # Cache this value since it's relatively constant
-                    up = self.lora_up.weight
-                    down = self.lora_down.weight
-                    
-                    # Sample a small subset of weights to estimate norm
-                    sample_size = min(self.ggpo_conv_weight_sample_size, up.size(0))
-                    if sample_size < up.size(0):
-                        up_indices = torch.randperm(up.size(0))[:sample_size]
-                        up_sample = up[up_indices]
-                    else:
-                        up_sample = up
-                        
-                    sample_size = min(self.ggpo_conv_weight_sample_size, down.size(0))
-                    if sample_size < down.size(0):
-                        down_indices = torch.randperm(down.size(0))[:sample_size]
-                        down_sample = down[down_indices]
-                    else:
-                        down_sample = down
-                    
-                    # Calculate squared Frobenius norms on samples
-                    up_norm_sq = torch.sum(up_sample**2) * (up.size(0) / up_sample.size(0))
-                    down_norm_sq = torch.sum(down_sample**2) * (down.size(0) / down_sample.size(0))
-                    
-                    # Cache the estimation factor
-                    self.conv_norm_estimate = torch.sqrt(up_norm_sq * down_norm_sq) * self.scale
-                
-                # Calculate per-channel output scaling - much faster than full norm calculation
-                up_flat = self.lora_up.weight.view(out_size, -1)
-                up_channel_norms = torch.sum(up_flat**2, dim=1, keepdim=True)
-                channel_sum = up_channel_norms.sum()
-                
-                # Distribute the precomputed norm across channels
-                if channel_sum > 0:
-                    self.weight_norms = up_channel_norms * (self.conv_norm_estimate / channel_sum)
-                    self.combined_weight_norms = torch.sqrt(
-                        (self.org_weight_norm_estimate**2) + self.weight_norms**2
-                    )
+                # Sample a small subset of weights to estimate norm
+                sample_size = min(self.ggpo_conv_weight_sample_size, up.size(0))
+                if sample_size < up.size(0):
+                    up_indices = torch.randperm(up.size(0))[:sample_size]
+                    up_sample = up[up_indices]
                 else:
-                    # Fallback to uniform distribution
-                    self.weight_norms = torch.ones(out_size, 1, device=self.device) * (self.conv_norm_estimate / out_size)
-                    self.combined_weight_norms = torch.sqrt(
-                        (self.org_weight_norm_estimate**2) + self.weight_norms**2
-                    )
-            except Exception:
-                # Silent fallback if calculation fails
-                logger.warning("update_norms Fallback")
-                out_size = self.lora_up.weight.size(0)
-                self.weight_norms = torch.ones(out_size, 1, device=self.device) * 0.01
-                self.combined_weight_norms = torch.sqrt(
-                    (self.org_weight_norm_estimate**2) + 0.0001
-                )
+                    up_sample = up
+                    
+                sample_size = min(self.ggpo_conv_weight_sample_size, down.size(0))
+                if sample_size < down.size(0):
+                    down_indices = torch.randperm(down.size(0))[:sample_size]
+                    down_sample = down[down_indices]
+                else:
+                    down_sample = down
+                
+                # Calculate squared Frobenius norms on samples
+                up_norm_sq = torch.sum(up_sample**2) * (up.size(0) / up_sample.size(0))
+                down_norm_sq = torch.sum(down_sample**2) * (down.size(0) / down_sample.size(0))
+                
+                # Cache the estimation factor
+                self.conv_norm_estimate = torch.sqrt(up_norm_sq * down_norm_sq) * self.scale
+            
+            # Calculate per-channel output scaling - much faster than full norm calculation
+            up_flat = self.lora_up.weight.view(out_size, -1)
+            up_channel_norms = torch.sum(up_flat**2, dim=1, keepdim=True)
+            channel_sum = up_channel_norms.sum()
+            
+            # Distribute the precomputed norm across channels
+            self.weight_norms = up_channel_norms * (self.conv_norm_estimate / channel_sum)
+            self.combined_weight_norms = torch.sqrt(
+                (self.org_weight_norm_estimate**2) + self.weight_norms**2
+            )
+
 
     @torch.no_grad()
     def update_grad_norms(self):
         if not self.training:
             return
         
-        if self.module_type != "linear" and not self.ggpo_conv:
+        if not(self.module_type == "linear" or (self.module_type.startswith("conv") and self.ggpo_conv)):
+            return
+        
+        if not (hasattr(self, 'lora_down') and hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None):
+            return
+        
+        if not (hasattr(self, 'lora_up') and hasattr(self.lora_up, 'weight') and self.lora_down.weight.grad is not None):
             return
             
         # Skip update every other step for convolutions to reduce overhead
@@ -524,19 +540,9 @@ class LycorisBaseModule(ModuleCustomSD):
         else:
             self._skip_grad_counter = False
 
-        # Check for gradients
-        lora_down_grad = None
-        lora_up_grad = None
-
         # Use direct parameter access instead of named iteration (faster)
-        if hasattr(self.lora_down, 'weight') and self.lora_down.weight.grad is not None:
-            lora_down_grad = self.lora_down.weight.grad
-            
-        if hasattr(self.lora_up, 'weight') and self.lora_up.weight.grad is not None:
-            lora_up_grad = self.lora_up.weight.grad
-
-        if lora_down_grad is None or lora_up_grad is None:
-            return
+        lora_down_grad = self.lora_down.weight.grad
+        lora_up_grad = self.lora_up.weight.grad
         
         # Fast path for linear layers
         if self.module_type == "linear":
@@ -544,29 +550,17 @@ class LycorisBaseModule(ModuleCustomSD):
             lora_up_weight = self.lora_up.weight
             lora_down_weight = self.lora_down.weight
             
-            # Use cached tensors where possible and avoid materializing full matrices
-            try:
-                # For linear layers, directly calculate gradient approximation
-                up_down_grad = self.scale * (lora_up_weight @ lora_down_grad)
-                up_grad_down = self.scale * (lora_up_grad @ lora_down_weight)
-                
-                # Sum the gradient components
-                approx_grad = up_down_grad + up_grad_down
-                
-                # Calculate row-wise norms
-                self.grad_norms = torch.norm(approx_grad, dim=1, keepdim=True)
-            except RuntimeError:
-                # Fallback to simpler estimation if matrices are incompatible
-                logger.warning("update_grad_norms linear fallback")
-                out_size = lora_up_weight.size(0)
-                grad_scale = torch.sqrt(torch.sum(lora_up_grad**2) * torch.sum(lora_down_weight**2) + 
-                                    torch.sum(lora_up_weight**2) * torch.sum(lora_down_grad**2)) * self.scale
-                
-                self.grad_norms = torch.ones(out_size, 1, device=self.device) * (grad_scale / out_size)
-            return
+            # For linear layers, directly calculate gradient approximation
+            up_down_grad = self.scale * (lora_up_weight @ lora_down_grad)
+            up_grad_down = self.scale * (lora_up_grad @ lora_down_weight)
+            
+            # Sum the gradient components
+            approx_grad = up_down_grad + up_grad_down
+            
+            # Calculate row-wise norms
+            self.grad_norms = torch.norm(approx_grad, dim=1, keepdim=True)
         
-        # Handle convolution layers with sampling-based approximation
-        try:
+        if self.module_type.startswith("conv") and self.ggpo_conv:
             # Use a fast approximation for convolution gradients
             out_size = self.lora_up.weight.size(0)
             
@@ -584,17 +578,8 @@ class LycorisBaseModule(ModuleCustomSD):
             up_channel_magnitudes = torch.norm(self.lora_up.weight.view(out_size, -1), dim=1, keepdim=True)
             magnitude_sum = up_channel_magnitudes.sum()
             
-            if magnitude_sum > 0:
-                # Distribute based on weight magnitudes (channels with larger weights get larger gradients)
-                self.grad_norms = up_channel_magnitudes * (grad_magnitude / magnitude_sum)
-            else:
-                # Fallback to uniform distribution
-                self.grad_norms = torch.ones(out_size, 1, device=self.device) * (grad_magnitude / out_size)
-        except Exception:
-            # Silent fallback
-            logger.warning("update_grad_norms conv fallback")
-            out_size = self.lora_up.weight.size(0)
-            self.grad_norms = torch.ones(out_size, 1, device=self.device) * 0.01
+            # Distribute based on weight magnitudes (channels with larger weights get larger gradients)
+            self.grad_norms = up_channel_magnitudes * (grad_magnitude / magnitude_sum)
 
     @torch.no_grad()
     def init_ggpo(self):
@@ -620,3 +605,6 @@ class LycorisBaseModule(ModuleCustomSD):
                 else:
                     self.sum_grads += grad.sum()
                     self.sum_squared_grads += (grad**2).sum()
+
+    def ggpo_pertubation(self, x):
+        return None
