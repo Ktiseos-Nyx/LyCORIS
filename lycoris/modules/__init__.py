@@ -11,7 +11,6 @@ from .norms import NormModule
 from .diag_oft import DiagOFTModule
 from .boft import ButterflyOFTModule
 from .glora import GLoRAModule
-from .glora_extended import GLoRAExtendedModule
 from .dylora import DyLoraModule
 from .ia3 import IA3Module
 
@@ -29,7 +28,6 @@ MODULE_LIST = [
     DiagOFTModule,
     ButterflyOFTModule,
     GLoRAModule,
-    GLoRAExtendedModule,
     DyLoraModule,
 ]
 
