@@ -1,5 +1,5 @@
-torch==2.7.1 --index-url https://download.pytorch.org/whl/cu128
-toml==0.10.2
-einops==0.8.1
-tqdm==4.67.1
-setuptools==80.9.0
+torch>=2.1.2
+toml>=0.10.2
+einops>=0.7.0
+tqdm>=4.67.1
+setuptools>=80.9.0
