@@ -57,7 +57,7 @@ class AbbaModule(LycorisBaseModule):
         use_scalar=False,
         rank_dropout_scale=False,
         weight_decompose=False,
-        wd_on_output=False,
+        wd_on_output=True,
         bypass_mode=None,
         rs_lora=False,
         ggpo_beta: Optional[float] = None,

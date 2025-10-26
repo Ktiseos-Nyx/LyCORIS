@@ -60,13 +60,14 @@ class LokrModule(LycorisBaseModule):
         factor: int = -1,  # factorization factor
         rank_dropout_scale=False,
         weight_decompose=False,
-        wd_on_output=False,
+        wd_on_output=True,
         full_matrix=False,
         bypass_mode=None,
         rs_lora=False,
         unbalanced_factorization=False,
         ggpo_beta: Optional[float] = None,
         ggpo_sigma: Optional[float] = None,
+        orthogonalize=False,
         **kwargs,
     ):
         super().__init__(
@@ -91,6 +92,9 @@ class LokrModule(LycorisBaseModule):
         self.use_w2 = False
         self.full_matrix = full_matrix
         self.rs_lora = rs_lora
+        self.use_orthogonal_weights = orthogonalize
+        if self.use_orthogonal_weights == True and use_scalar == False:
+            use_scalar = True
 
         if self.module_type.startswith("conv"):
             in_dim = org_module.in_channels
@@ -230,24 +234,43 @@ class LokrModule(LycorisBaseModule):
             self.register_buffer("scalar", torch.tensor(1.0), persistent=False)
 
         if self.use_w2:
-            if use_scalar:
+            if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.lokr_w2)
+            elif use_scalar:
                 torch.nn.init.kaiming_uniform_(self.lokr_w2, a=math.sqrt(5))
             else:
                 torch.nn.init.constant_(self.lokr_w2, 0)
         else:
             if self.tucker:
-                torch.nn.init.kaiming_uniform_(self.lokr_t2, a=math.sqrt(5))
-            torch.nn.init.kaiming_uniform_(self.lokr_w2_a, a=math.sqrt(5))
-            if use_scalar:
+                if self.use_orthogonal_weights:
+                    torch.nn.init.orthogonal_(self.lokr_t2)
+                else:
+                    torch.nn.init.kaiming_uniform_(self.lokr_t2, a=math.sqrt(5))
+
+            if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.lokr_w2_a)
+            else:
+                torch.nn.init.kaiming_uniform_(self.lokr_w2_a, a=math.sqrt(5))
+
+            if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.lokr_w2_b)
+            elif use_scalar:
                 torch.nn.init.kaiming_uniform_(self.lokr_w2_b, a=math.sqrt(5))
             else:
                 torch.nn.init.constant_(self.lokr_w2_b, 0)
 
         if self.use_w1:
-            torch.nn.init.kaiming_uniform_(self.lokr_w1, a=math.sqrt(5))
+            if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.lokr_w1)
+            else:
+                torch.nn.init.kaiming_uniform_(self.lokr_w1, a=math.sqrt(5))
         else:
-            torch.nn.init.kaiming_uniform_(self.lokr_w1_a, a=math.sqrt(5))
-            torch.nn.init.kaiming_uniform_(self.lokr_w1_b, a=math.sqrt(5))
+            if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.lokr_w1_a)
+                torch.nn.init.orthogonal_(self.lokr_w1_b)
+            else:
+                torch.nn.init.kaiming_uniform_(self.lokr_w1_a, a=math.sqrt(5))
+                torch.nn.init.kaiming_uniform_(self.lokr_w1_b, a=math.sqrt(5))
 
     @classmethod
     def make_module_from_state_dict(
@@ -362,19 +385,25 @@ class LokrModule(LycorisBaseModule):
             )
 
     def get_weight(self, shape):
-        weight = make_kron(
-            self.lokr_w1 if self.use_w1 else self.lokr_w1_a @ self.lokr_w1_b,
-            (
-                self.lokr_w2
-                if self.use_w2
-                else (
-                    rebuild_tucker(self.lokr_t2, self.lokr_w2_a, self.lokr_w2_b)
-                    if self.tucker
-                    else self.lokr_w2_a @ self.lokr_w2_b
-                )
-            ),
-            self.scale,
-        )
+        if self.use_w1:
+            w1 = self._orthogonalize(self.lokr_w1)
+        else:
+            w1_a_ortho = self._orthogonalize(self.lokr_w1_a)
+            w1_b_ortho = self._orthogonalize(self.lokr_w1_b)
+            w1 = w1_a_ortho @ w1_b_ortho
+
+        if self.use_w2:
+            w2 = self._orthogonalize(self.lokr_w2)
+        else:
+            w2_a_ortho = self._orthogonalize(self.lokr_w2_a)
+            w2_b_ortho = self._orthogonalize(self.lokr_w2_b)
+            if self.tucker:
+                # We don't orthogonalize the core tensor `lokr_t2`
+                w2 = rebuild_tucker(self.lokr_t2, w2_a_ortho, w2_b_ortho)
+            else:
+                w2 = w2_a_ortho @ w2_b_ortho
+        
+        weight = make_kron(w1, w2, self.scale)
         dtype = weight.dtype
         if shape is not None:
             weight = weight.view(shape)
@@ -481,10 +510,10 @@ class LokrModule(LycorisBaseModule):
     def bypass_forward_diff(self, h, scale=1):
         is_conv = self.module_type.startswith("conv")
         if self.use_w2:
-            ba = self.lokr_w2
+            ba = self._orthogonalize(self.lokr_w2)
         else:
-            a = self.lokr_w2_b
-            b = self.lokr_w2_a
+            a = self._orthogonalize(self.lokr_w2_b)
+            b = self._orthogonalize(self.lokr_w2_a)
 
             if self.tucker:
                 t = self.lokr_t2
@@ -495,9 +524,11 @@ class LokrModule(LycorisBaseModule):
                 b = b.view(*b.shape, *[1] * (len(self.shape) - 2))
 
         if self.use_w1:
-            c = self.lokr_w1
+            c = self._orthogonalize(self.lokr_w1)
         else:
-            c = self.lokr_w1_a @ self.lokr_w1_b
+            w1_a_ortho = self._orthogonalize(self.lokr_w1_a)
+            w1_b_ortho = self._orthogonalize(self.lokr_w1_b)
+            c = w1_a_ortho @ w1_b_ortho
         uq = c.size(1)
 
         if is_conv:

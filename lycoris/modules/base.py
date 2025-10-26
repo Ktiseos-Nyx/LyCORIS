@@ -213,6 +213,37 @@ class LycorisBaseModule(ModuleCustomSD):
         self.ggpo_conv = ggpo_conv
         self.ggpo_conv_weight_sample_size = ggpo_conv_weight_sample_size
 
+    def _orthogonalize(self, weight_matrix: torch.Tensor) -> torch.Tensor:
+        """
+        Orthogonalizes the weight matrix using QR decomposition.
+        This is only active during training if `use_orthogonal_weights` is True.
+        """
+        if not self.use_orthogonal_weights or not self.training:
+            return weight_matrix
+
+        # QR decomposition works on 2D matrices.
+        # Conv weights can be > 2D, but LoKr factors are 2D.
+        shape = weight_matrix.shape
+        dimcount = len(shape)
+        if dimcount == 0:
+            return weight_matrix
+        elif dimcount > 2:
+            weight_matrix = weight_matrix.reshape(len(weight_matrix), -1) # Make 2D if conv or 1 dim
+        elif dimcount < 2:
+            weight_matrix = weight_matrix.reshape(1, -1) # Make 2D if conv or 1 dim
+        
+        # For matrices where rows >= cols, QR gives orthonormal columns.
+        # For matrices where rows < cols, we transpose to make columns from rows,
+        # apply QR, and transpose back. This results in orthonormal rows.
+        rows, cols = weight_matrix.shape
+        if rows >= cols:
+            q, r = torch.linalg.qr(weight_matrix)
+            weight_matrix = q * torch.diag(r)
+        else:
+            q, r = torch.linalg.qr(weight_matrix.T)
+            weight_matrix = (q * torch.diag(r)).T
+        return weight_matrix.reshape(shape).contiguous()
+
     @classmethod
     def parametrize(cls, org_module, attr, *args, **kwargs):
         from .full import FullModule

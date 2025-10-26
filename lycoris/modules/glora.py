@@ -52,9 +52,10 @@ class GLoRAModule(LycorisBaseModule):
         use_scalar=False,
         rank_dropout_scale=False,
         weight_decompose=False,
-        wd_on_output=False,
+        wd_on_output=True,
         bypass_mode=None,
         rs_lora=False,
+        orthogonalize=False,
         **kwargs,
     ):
         """
@@ -83,6 +84,9 @@ class GLoRAModule(LycorisBaseModule):
         self.lora_dim = lora_dim
         self.tucker = False
         self.rs_lora = rs_lora
+        self.use_orthogonal_weights = orthogonalize
+        if self.use_orthogonal_weights == True and use_scalar == False:
+            use_scalar = True
 
         if dropout and not bypass_mode:
             log_glora_drop()
@@ -144,14 +148,28 @@ class GLoRAModule(LycorisBaseModule):
             self.register_buffer("scalar", torch.tensor(1.0), persistent=False)
 
         # same as microsoft's
-        torch.nn.init.kaiming_uniform_(self.a1.weight, a=math.sqrt(5))
-        torch.nn.init.kaiming_uniform_(self.b1.weight, a=math.sqrt(5))
-        if use_scalar:
+        if self.use_orthogonal_weights:
+            torch.nn.init.orthogonal_(self.a1.weight)
+            torch.nn.init.orthogonal_(self.b1.weight)
+        else:
+            torch.nn.init.kaiming_uniform_(self.a1.weight, a=math.sqrt(5))
+            torch.nn.init.kaiming_uniform_(self.b1.weight, a=math.sqrt(5))
+
+        if self.use_orthogonal_weights:
+            torch.nn.init.orthogonal_(self.a2.weight)
+            torch.nn.init.orthogonal_(self.b2.weight)
+        elif use_scalar:
             torch.nn.init.kaiming_uniform_(self.a2.weight, a=math.sqrt(5))
             torch.nn.init.kaiming_uniform_(self.b2.weight, a=math.sqrt(5))
         else:
             torch.nn.init.zeros_(self.a2.weight)
             torch.nn.init.zeros_(self.b2.weight)
+
+        if self.tucker:
+            if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.bm.weight)
+            else:
+                torch.nn.init.kaiming_uniform_(self.bm.weight, a=math.sqrt(5))
 
     @classmethod
     def make_module_from_state_dict(
@@ -199,15 +217,18 @@ class GLoRAModule(LycorisBaseModule):
             )
 
     def make_weight(self, device=None):
-        wa1 = self.a1.weight.view(self.a1.weight.size(0), -1)
-        wa2 = self.a2.weight.view(self.a2.weight.size(0), -1)
+        wa1 = self._orthogonalize(self.a1.weight.to(device)).view(self.a1.weight.size(0), -1)
+        wa2 = self._orthogonalize(self.a2.weight.to(device)).view(self.a2.weight.size(0), -1)
         orig = self.org_weight.to(dtype=wa1.dtype)
 
         if self.tucker:
-            wb = tucker_weight_from_conv(self.b1.weight, self.b2.weight, self.bm.weight)
+            wb1 = self._orthogonalize(self.b1.weight.to(device))
+            wb2 = self._orthogonalize(self.b2.weight.to(device))
+            wbm = self._orthogonalize(self.bm.weight.to(device))
+            wb = tucker_weight_from_conv(wb1, wb2, wbm)
         else:
-            wb1 = self.b1.weight.view(self.b1.weight.size(0), -1)
-            wb2 = self.b2.weight.view(self.b2.weight.size(0), -1)
+            wb1 = self._orthogonalize(self.b1.weight.to(device)).view(self.b1.weight.size(0), -1)
+            wb2 = self._orthogonalize(self.b2.weight.to(device)).view(self.b2.weight.size(0), -1)
             wb = wb1 @ wb2
             wb = wb.view(*orig.shape)
         if orig.dim() > 2:
@@ -229,32 +250,64 @@ class GLoRAModule(LycorisBaseModule):
 
     def _bypass_forward(self, x, scale=1, diff=False):
         scale = self.scale * scale
-        ax_mid = self.a2(x) * scale
-        bx_mid = self.b2(x) * scale
+
+        scale = self.scale * scale
+        
+        # Orthogonalize all weights on the fly
+        wa1 = self._orthogonalize(self.a1.weight)
+        wa2 = self._orthogonalize(self.a2.weight)
+        wb1 = self._orthogonalize(self.b1.weight)
+        wb2 = self._orthogonalize(self.b2.weight)
+        
+        # Branch A calculation
+        ax_mid = self.down_op(x, wa2) * scale
+        
+        # Branch B calculation
+        bx_mid = self.down_op(x, wb2) * scale
 
         if self.rank_dropout and self.training:
             drop_a = (
-                torch.rand(self.lora_dim, device=ax_mid.device) < self.rank_dropout
+                torch.rand(self.lora_dim, device=ax_mid.device) > self.rank_dropout
             ).to(ax_mid.dtype)
             drop_b = (
-                torch.rand(self.lora_dim, device=bx_mid.device) < self.rank_dropout
+                torch.rand(self.lora_dim, device=bx_mid.device) > self.rank_dropout
             ).to(bx_mid.dtype)
             if self.rank_dropout_scale:
                 drop_a /= drop_a.mean()
                 drop_b /= drop_b.mean()
-            if (dims := len(x.shape)) == 4:
-                drop_a = drop_a.view(1, -1, 1, 1)
-                drop_b = drop_b.view(1, -1, 1, 1)
-            else:
+            if (dims := len(x.shape)) >= 4: # Support conv1d, conv2d, conv3d
+                drop_a = drop_a.view(1, -1, *([1]*(dims-2)))
+                drop_b = drop_b.view(1, -1, *([1]*(dims-2)))
+            else: # Linear
                 drop_a = drop_a.view(*[1] * (dims - 1), -1)
                 drop_b = drop_b.view(*[1] * (dims - 1), -1)
             ax_mid = ax_mid * drop_a
             bx_mid = bx_mid * drop_b
+            
+        # Finish branch A
+        ax = self.up_op(ax_mid, wa1)
+
+        # Finish branch B
+        if self.tucker:
+            wbm = self._orthogonalize(self.bm.weight)
+            # Use functional call for the middle convolution
+            bx_mid = self.op(
+                bx_mid,
+                wbm,
+                bias=None,
+                stride=self.bm.stride,
+                padding=self.bm.padding,
+                dilation=self.bm.dilation,
+                groups=self.bm.groups,
+            )
+        bx = self.up_op(bx_mid, wb1)
+
+        # W(X + A(X)) + B(X)
         return (
             self.org_forward(
-                (0 if diff else x) + self.drop(self.a1(ax_mid)) * self.scale
+                (0 if diff else x) + self.drop(ax) * self.scale
             )
-            + self.drop(self.b1(bx_mid)) * self.scale
+            + self.drop(bx) * self.scale
         )
 
     def bypass_forward_diff(self, x, scale=1):

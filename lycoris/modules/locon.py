@@ -50,13 +50,14 @@ class LoConModule(LycorisBaseModule):
         use_scalar=False,
         rank_dropout_scale=False,
         weight_decompose=False,
-        wd_on_output=False,
+        wd_on_output=True,
         bypass_mode=None,
         rs_lora=False,
         ggpo_beta: Optional[float] = None,
         ggpo_sigma: Optional[float] = None,
         ggpo_conv: bool = False,
         ggpo_conv_weight_sample_size: int = 100,
+        orthogonalize=False,
         **kwargs,
     ):
         """if alpha == 0 or None, alpha is rank (no scaling)."""
@@ -79,6 +80,9 @@ class LoConModule(LycorisBaseModule):
         self.lora_dim = lora_dim
         self.tucker = False
         self.rs_lora = rs_lora
+        self.use_orthogonal_weights = orthogonalize
+        if self.use_orthogonal_weights == True and use_scalar == False:
+            use_scalar = True
 
         if self.module_type.startswith("conv"):
             self.isconv = True
@@ -156,14 +160,27 @@ class LoConModule(LycorisBaseModule):
             self.scalar = nn.Parameter(torch.tensor(0.0))
         else:
             self.register_buffer("scalar", torch.tensor(1.0), persistent=False)
+
         # same as microsoft's
-        torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
-        if use_scalar:
-            torch.nn.init.kaiming_uniform_(self.lora_up.weight, a=math.sqrt(5))
+
+        if self.use_orthogonal_weights:
+            torch.nn.init.orthogonal_(self.lora_down.weight)
         else:
-            torch.nn.init.constant_(self.lora_up.weight, 0)
+            torch.nn.init.kaiming_uniform_(self.lora_down.weight, a=math.sqrt(5))
+
+        if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.lora_up.weight)
+        else:
+            if use_scalar:
+                torch.nn.init.kaiming_uniform_(self.lora_up.weight, a=math.sqrt(5))
+            else:
+                torch.nn.init.constant_(self.lora_up.weight, 0)
+
         if self.tucker:
-            torch.nn.init.kaiming_uniform_(self.lora_mid.weight, a=math.sqrt(5))
+            if self.use_orthogonal_weights:
+                torch.nn.init.orthogonal_(self.lora_mid.weight)
+            else:
+                torch.nn.init.kaiming_uniform_(self.lora_mid.weight, a=math.sqrt(5))
 
         self.init_ggpo()
 
@@ -203,10 +220,10 @@ class LoConModule(LycorisBaseModule):
             )
 
     def make_weight(self, device=None):
-        wa = self.lora_up.weight.to(device)
-        wb = self.lora_down.weight.to(device)
+        wa = self._orthogonalize(self.lora_up.weight.to(device))
+        wb = self._orthogonalize(self.lora_down.weight.to(device))
         if self.tucker:
-            t = self.lora_mid.weight
+            t = self._orthogonalize(self.lora_mid.weight.to(device))
             wa = wa.view(wa.size(0), -1).transpose(0, 1)
             wb = wb.view(wb.size(0), -1)
             weight = rebuild_tucker(t, wa, wb)
@@ -298,10 +315,38 @@ class LoConModule(LycorisBaseModule):
         return unscaled_norm
 
     def bypass_forward_diff(self, x, scale=1):
-        mid = self.lora_down(x)
+        # Orthogonalize weights on the fly for this forward pass.
+        # This is only active during training if self.use_orthogonal_weights is True.
+        wb = self._orthogonalize(self.lora_down.weight)
+        wa = self._orthogonalize(self.lora_up.weight)
+
+        # Manually apply the down network using the orthogonalized weight
+        if self.isconv:
+            # For convolution, we need to pass the module's parameters (stride, padding, etc.)
+            mid = self.down_op(
+                x,
+                wb,
+                bias=None,
+                stride=self.lora_down.stride,
+                padding=self.lora_down.padding,
+                dilation=self.lora_down.dilation,
+                groups=self.lora_down.groups,
+            )
+        else: # is linear
+            mid = self.down_op(x, wb)
 
         if self.tucker:
-            mid = self.lora_mid(mid)
+            # CHANGE 3: Apply lora_mid operation manually with orthogonalized weight
+            wc = self._orthogonalize(self.lora_mid.weight)
+            mid = self.op(
+                mid,
+                wc,
+                bias=None,
+                stride=self.lora_mid.stride,
+                padding=self.lora_mid.padding,
+                dilation=self.lora_mid.dilation,
+                groups=self.lora_mid.groups,
+            )
 
         if self.rank_dropout and self.training:
             drop = (
@@ -315,7 +360,20 @@ class LoConModule(LycorisBaseModule):
                 drop = drop.view(*[1] * (dims - 1), -1)
             mid = mid * drop
 
-        up = self.lora_up(mid)
+        # Manually apply the up network using the orthogonalized weight
+        if self.isconv:
+            # For convolution, we need to pass the module's parameters (stride, padding, etc.)
+            up = self.up_op(
+                mid,
+                wa,
+                bias=None,
+                stride=self.lora_up.stride,
+                padding=self.lora_up.padding,
+                dilation=self.lora_up.dilation,
+                groups=self.lora_up.groups,
+            )
+        else: # is linear
+            up = self.up_op(mid, wa)
 
         return self.drop(up * self.scalar * self.scale * scale)
 
@@ -355,12 +413,12 @@ class LoConModule(LycorisBaseModule):
         # Apply lora dropout during weight computation if enabled
         if (not self.wd and (self.tucker or self.rank_dropout)):
             # Get the lora weights
-            wa = self.lora_up.weight.to(x.device).to(dtype)
-            wb = self.lora_down.weight.to(x.device).to(dtype)
+            wa = self._orthogonalize(self.lora_up.weight).to(x.device).to(dtype)
+            wb = self._orthogonalize(self.lora_down.weight).to(x.device).to(dtype)
             
             # Compute the combined weight
             if self.tucker:
-                t = self.lora_mid.weight.to(x.device).to(dtype)
+                t = self._orthogonalize(self.lora_mid.weight).to(x.device).to(dtype)
                 wa = wa.view(wa.size(0), -1).transpose(0, 1)
                 wb = wb.view(wb.size(0), -1)
                 diff_weight = rebuild_tucker(t, wa, wb)

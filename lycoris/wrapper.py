@@ -98,11 +98,17 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     constraint = float(kwargs.get("constraint", 0) or 0)
     rescaled = str_bool(kwargs.get("rescaled", False))
     weight_decompose = str_bool(kwargs.get("dora_wd", False))
-    wd_on_output = str_bool(kwargs.get("wd_on_output", False))
+    wd_on_output = str_bool(kwargs.get("wd_on_output", True))
     full_matrix = str_bool(kwargs.get("full_matrix", False))
     bypass_mode = str_bool(kwargs.get("bypass_mode", False))
     rs_lora = str_bool(kwargs.get("rs_lora", False))
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
+    orthogonalize = str_bool(kwargs.get("orthogonalize", False))
+    if orthogonalize:
+        logger.info("Orthogonalization of weights for LoKr is enabled")
+        if use_scalar == False:
+            logger.info("Forcing usage of use_scalar as orthogonalization is enabled")
+            use_scalar = True
     torch_compile = str_bool(kwargs.get("torch_compile", False))
     torch_compile_mode = kwargs.get("torch_compile_mode", "max-autotune")
     torch_compile_dynamic = str_bool(kwargs.get("torch_compile_dynamic", False))
@@ -190,6 +196,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         ggpo_beta=ggpo_beta,
         ggpo_sigma=ggpo_sigma,
         ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
+        orthogonalize=orthogonalize,
     )
 
     if torch_compile:
@@ -319,7 +326,7 @@ class LycorisNetwork(torch.nn.Module):
         self.ggpo_conv = kwargs.get("ggpo_conv", False)
         self.ggpo_conv_weight_sample_size = kwargs.get("ggpo_conv_weight_sample_size", 100)
 
-        self.wd_on_output = kwargs.get("wd_on_output", False)
+        self.wd_on_output = kwargs.get("wd_on_output", True)
 
         if self.ggpo_beta is not None:
             self.ggpo_beta = float(self.ggpo_beta)
