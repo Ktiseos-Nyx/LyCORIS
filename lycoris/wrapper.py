@@ -105,7 +105,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     unbalanced_factorization = str_bool(kwargs.get("unbalanced_factorization", False))
     orthogonalize = str_bool(kwargs.get("orthogonalize", False))
     if orthogonalize:
-        logger.info("Orthogonalization of weights for LoKr is enabled")
+        logger.info("Orthogonalization of weights for Lycoris is enabled")
         if use_scalar == False:
             logger.info("Forcing usage of use_scalar as orthogonalization is enabled")
             use_scalar = True
