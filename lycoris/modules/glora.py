@@ -219,7 +219,8 @@ class GLoRAModule(LycorisBaseModule):
     def make_weight(self, device=None):
         wa1 = self._orthogonalize(self.a1.weight.to(device)).view(self.a1.weight.size(0), -1)
         wa2 = self._orthogonalize(self.a2.weight.to(device)).view(self.a2.weight.size(0), -1)
-        orig = self.org_weight.to(dtype=wa1.dtype)
+
+        orig = self.org_weight.to(device=device, dtype=wa1.dtype)
 
         if self.tucker:
             wb1 = self._orthogonalize(self.b1.weight.to(device))
@@ -249,8 +250,6 @@ class GLoRAModule(LycorisBaseModule):
         return self.org_weight + diff_w, None
 
     def _bypass_forward(self, x, scale=1, diff=False):
-        scale = self.scale * scale
-
         scale = self.scale * scale
         
         # Orthogonalize all weights on the fly
@@ -324,8 +323,8 @@ class GLoRAModule(LycorisBaseModule):
             return self.bypass_forward(x, self.multiplier)
         else:
             weight = (
-                self.org_module[0].weight.data.to(self.dtype)
-                + self.get_diff_weight(multiplier=self.multiplier)[0]
+                self.org_module[0].weight.data.to(device=x.device, dtype=self.dtype)
+                + self.get_diff_weight(multiplier=self.multiplier, device=x.device)[0]
             )
             bias = (
                 None
