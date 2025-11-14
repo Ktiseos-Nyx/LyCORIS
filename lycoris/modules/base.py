@@ -232,17 +232,21 @@ class LycorisBaseModule(ModuleCustomSD):
         elif dimcount < 2:
             weight_matrix = weight_matrix.reshape(1, -1) # Make 2D if conv or 1 dim
         
+        # Upcast to fp32 for QR (bf16 CUDA kernel not implemented)
+        orig_dtype = weight_matrix.dtype
+        weight_matrix_fp32 = weight_matrix.to(torch.float32)
+
         # For matrices where rows >= cols, QR gives orthonormal columns.
         # For matrices where rows < cols, we transpose to make columns from rows,
         # apply QR, and transpose back. This results in orthonormal rows.
         rows, cols = weight_matrix.shape
         if rows >= cols:
-            q, r = torch.linalg.qr(weight_matrix)
-            weight_matrix = q * torch.diag(r)
+            q, r = torch.linalg.qr(weight_matrix_fp32)
+            weight_matrix_fp32 = q * torch.diag(r)
         else:
-            q, r = torch.linalg.qr(weight_matrix.T)
-            weight_matrix = (q * torch.diag(r)).T
-        return weight_matrix.reshape(shape).contiguous()
+            q, r = torch.linalg.qr(weight_matrix_fp32.T)
+            weight_matrix_fp32 = (q * torch.diag(r)).T
+        return weight_matrix_fp32.to(orig_dtype).reshape(shape).contiguous()
 
     @classmethod
     def parametrize(cls, org_module, attr, *args, **kwargs):
