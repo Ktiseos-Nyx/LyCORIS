@@ -195,9 +195,9 @@ class GLoRAModule(LycorisBaseModule):
         destination = {}
         destination["alpha"] = self.alpha
         destination["a1.weight"] = self.a1.weight
-        destination["a2.weight"] = self.a2.weight * self.scalar
+        destination["a2.weight"] = self.a2.weight * self.scalar.to(device=self.a2.weight.device, non_blocking=True)
         destination["b1.weight"] = self.b1.weight
-        destination["b2.weight"] = self.b2.weight * self.scalar
+        destination["b2.weight"] = self.b2.weight * self.scalar.to(device=self.b2.weight.device, non_blocking=True)
         if self.tucker:
             destination["bm.weight"] = self.bm.weight
         return destination
