@@ -415,12 +415,12 @@ class LoConModule(LycorisBaseModule):
         # Apply lora dropout during weight computation if enabled
         if (not self.wd and (self.tucker or self.rank_dropout)):
             # Get the lora weights
-            wa = self._orthogonalize(self.lora_up.weight).to(x.device).to(dtype)
-            wb = self._orthogonalize(self.lora_down.weight).to(x.device).to(dtype)
+            wa = self._orthogonalize(self.lora_up.weight).to(device=x.device,dtype=dtype)
+            wb = self._orthogonalize(self.lora_down.weight).to(device=x.device,dtype=dtype)
             
             # Compute the combined weight
             if self.tucker:
-                t = self._orthogonalize(self.lora_mid.weight).to(x.device).to(dtype)
+                t = self._orthogonalize(self.lora_mid.weight).to(device=x.device,dtype=dtype)
                 wa = wa.view(wa.size(0), -1).transpose(0, 1)
                 wb = wb.view(wb.size(0), -1)
                 diff_weight = rebuild_tucker(t, wa, wb)

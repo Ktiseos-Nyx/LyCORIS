@@ -177,13 +177,13 @@ class FullModule(LycorisBaseModule):
             if self.bias is not None:
                 diff_b = self.bias * multiplier
             return self.weight * multiplier, diff_b
-        org_weight = self.org_module[0].weight.to(device, dtype=self.weight.dtype)
+        org_weight = self.get_org_weight_for_compute(device).to(self.weight.dtype, non_blocking=True)
         diff = self.weight.to(device) - org_weight
         diff_b = None
         if shape:
             diff = diff.view(shape)
         if self.bias is not None:
-            org_bias = self.org_module[0].bias.to(device, dtype=self.bias.dtype)
+            org_bias = self.get_org_bias_for_compute(device).to(dtype=self.bias.dtype, non_blocking=True)
             diff_b = self.bias.to(device) - org_bias
         if device is not None:
             diff = diff.to(device)

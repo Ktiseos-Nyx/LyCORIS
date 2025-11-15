@@ -680,6 +680,12 @@ class LycorisNetwork(torch.nn.Module):
                 #ia3
                 if hasattr(lora, 'weight'):
                     lora.weight.to(device)
+
+                #full
+                if hasattr(lora, 'diff'):
+                    lora.diff.to(device)
+                if hasattr(lora, 'diff_b'):
+                    lora.diff_b.to(device)
                 
                 #dora
                 if hasattr(lora, 'dora_scale'):
