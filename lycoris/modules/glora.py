@@ -253,10 +253,10 @@ class GLoRAModule(LycorisBaseModule):
         scale = self.scale * scale
         
         # Orthogonalize all weights on the fly
-        wa1 = self._orthogonalize(self.a1.weight)
-        wa2 = self._orthogonalize(self.a2.weight)
-        wb1 = self._orthogonalize(self.b1.weight)
-        wb2 = self._orthogonalize(self.b2.weight)
+        wa1 = self._orthogonalize(self.a1.weight).to(x.device, dtype=x.dtype)
+        wa2 = self._orthogonalize(self.a2.weight).to(x.device, dtype=x.dtype)
+        wb1 = self._orthogonalize(self.b1.weight).to(x.device, dtype=x.dtype)
+        wb2 = self._orthogonalize(self.b2.weight).to(x.device, dtype=x.dtype)
         
         # Branch A calculation
         ax_mid = self.down_op(x, wa2) * scale
@@ -323,14 +323,14 @@ class GLoRAModule(LycorisBaseModule):
             return self.bypass_forward(x, self.multiplier)
         else:
             weight = (
-                self.org_module[0].weight.data.to(device=x.device, dtype=self.dtype)
+                self.get_org_weight_for_compute(x.device).data.to(self.dtype, non_blocking=True)
                 + self.get_diff_weight(multiplier=self.multiplier, device=x.device)[0]
             )
-            bias = (
-                None
-                if self.org_module[0].bias is None
-                else self.org_module[0].bias.data
-            )
+
+            bias = self.get_org_bias_for_compute(x.device)
+            if bias is not None:
+                bias = bias.to(self.dtype, non_blocking=True).data
+
             if self.dropout:
                 x = self.drop(x)
 

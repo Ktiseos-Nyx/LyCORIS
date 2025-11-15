@@ -140,9 +140,9 @@ class IA3Module(LycorisBaseModule):
             return self.bypass_forward(x, self.multiplier)
         else:
             weight = self.get_merged_weight(multiplier=self.multiplier)[0]
-            bias = (
-                None
-                if self.org_module[0].bias is None
-                else self.org_module[0].bias.data
-            )
+
+            bias = self.get_org_bias_for_compute(x.device)
+            if bias is not None:
+                bias = bias.to(x.dtype, non_blocking=True)
+
             return self.op(x, weight, bias, **self.kw_dict)

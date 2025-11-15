@@ -201,14 +201,15 @@ class ButterflyOFTModule(LycorisBaseModule):
         r = self._apply_multiplicative_dropout(r)
         
         # Ensure org_weight is on the correct device and dtype early
-        org_weight_dtype = self.org_module[0].weight.dtype
+        org_weight = self.get_org_weight_for_compute(device)
+        org_weight_dtype = org_weight.dtype
         r_dtype = r.dtype # Usually float32 due to inverse, ensure consistency
         target_dtype = torch.promote_types(org_weight_dtype, r_dtype)
 
         if device is None:
             device = self.oft_blocks.device
-            
-        inp = org = self.org_weight.to(device, dtype=target_dtype)
+            org_weight
+        inp = org = org_weight.to(target_dtype, non_blocking=True)
 
         for i in range(m):
             bi = r[i]  # b_num, b_size, b_size
@@ -321,9 +322,9 @@ class ButterflyOFTModule(LycorisBaseModule):
         else:
             w = self.make_weight(scale, x.device)
 
-            current_bias = None
-            if hasattr(self.org_module[0], 'bias') and self.org_module[0].bias is not None:
-                current_bias = self.org_module[0].bias
+            current_bias = self.get_org_bias_for_compute(x.device)
+            if current_bias is not None:
+                current_bias = current_bias.to(x.dtype, non_blocking=True)
             
             kw_dict = {**self.kw_dict, "weight": w, "bias": current_bias}
 

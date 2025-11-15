@@ -106,7 +106,7 @@ class LoConModule(LycorisBaseModule):
                     in_dim, lora_dim, k_size, stride, padding, bias=False
                 )
             self.lora_up = self.module(lora_dim, out_dim, 1, bias=False)
-        elif isinstance(org_module, nn.Linear):
+        elif self.module_type == "linear" or isinstance(org_module, nn.Linear):
             self.isconv = False
             self.down_op = F.linear
             self.up_op = F.linear
@@ -317,8 +317,8 @@ class LoConModule(LycorisBaseModule):
     def bypass_forward_diff(self, x, scale=1):
         # Orthogonalize weights on the fly for this forward pass.
         # This is only active during training if self.use_orthogonal_weights is True.
-        wb = self._orthogonalize(self.lora_down.weight)
-        wa = self._orthogonalize(self.lora_up.weight)
+        wb = self._orthogonalize(self.lora_down.weight).to(x.device, dtype=x.dtype)
+        wa = self._orthogonalize(self.lora_up.weight).to(x.device, dtype=x.dtype)
 
         # Manually apply the down network using the orthogonalized weight
         if self.isconv:
@@ -409,6 +409,8 @@ class LoConModule(LycorisBaseModule):
         
         # Non-bypass mode with perturbation
         dtype = self.dtype
+        # Non-bypass mode: Get org_weight with async transfer
+        org_weight_gpu = self.get_org_weight_for_compute(x.device).to(dtype, non_blocking=True)
         
         # Apply lora dropout during weight computation if enabled
         if (not self.wd and (self.tucker or self.rank_dropout)):
@@ -441,7 +443,7 @@ class LoConModule(LycorisBaseModule):
             diff_weight = self.make_weight(x.device).to(dtype) * self.scale
         
         # Apply the weight to the input
-        weight = self.org_module[0].weight.data.to(dtype)
+        weight = org_weight_gpu.data
         
         if self.wd:
             weight = self.apply_weight_decompose(weight + diff_weight, self.multiplier)
@@ -451,8 +453,11 @@ class LoConModule(LycorisBaseModule):
         else:
             weight = weight + diff_weight * self.multiplier
         
-        bias = None if self.org_module[0].bias is None else self.org_module[0].bias.data
-        
+        # Get bias
+        bias = self.get_org_bias_for_compute(x.device)
+        if bias is not None:
+            bias = bias.to(dtype, non_blocking=True)
+
         # Apply operation with weights
         result = self.op(x, weight, bias, **self.kw_dict)
         

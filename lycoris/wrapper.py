@@ -33,6 +33,11 @@ from .logging import logger
 
 from typing import Optional
 
+try:
+    from ramtorch.modules.linear import CPUBouncingLinear
+except ImportError:
+    CPUBouncingLinear = type(None)
+
 
 VALID_PRESET_KEYS = [
     "enable_conv",
@@ -408,7 +413,7 @@ class LycorisNetwork(torch.nn.Module):
                     **kwargs,
                 )
             lora = None
-            if isinstance(module, torch.nn.Linear) and lora_dim > 0:
+            if isinstance(module, (torch.nn.Linear, CPUBouncingLinear)) and lora_dim > 0:
                 dim = dim or lora_dim
                 alpha = alpha or self.alpha
             elif isinstance(
@@ -595,6 +600,100 @@ class LycorisNetwork(torch.nn.Module):
                 lora.lora_name not in names
             ), f"duplicated lora name: {lora.lora_name}"
             names.add(lora.lora_name)
+
+        self._setup_ramtorch_device_handling()
+
+    def _setup_ramtorch_device_handling(self):
+        """Ensure RamTorch modules stay on CPU while LoRA adapters are on GPU"""
+        device = torch.cuda.current_device() if torch.cuda.is_available() else torch.device('cpu')
+        
+        for lora in self.loras:
+            if lora.is_ramtorch_org:
+                # Move parameters to GPU
+
+                # Lora/locon
+                if hasattr(lora, 'lora_up'):
+                    lora.lora_up.to(device)
+                if hasattr(lora, 'lora_down'):
+                    lora.lora_down.to(device)
+                if hasattr(lora, 'lora_mid'):
+                    lora.lora_mid.to(device)
+
+                # Glora
+                if hasattr(lora, 'a1'):
+                    lora.a1.to(device)
+                if hasattr(lora, 'a2'):
+                    lora.a2.to(device)
+                if hasattr(lora, 'b1'):
+                    lora.b1.to(device)
+                if hasattr(lora, 'b2'):
+                    lora.b2.to(device)
+                if hasattr(lora, 'bm'):
+                    lora.bm.to(device)
+
+                # oft/boft
+                if hasattr(lora, 'oft_blocks'):
+                    lora.oft_blocks.to(device)
+
+                # lokr
+                if hasattr(lora, 'lokr_w1'):
+                    lora.lokr_w1.to(device)
+                if hasattr(lora, 'lokr_w1_a'):
+                    lora.lokr_w1_a.to(device)
+                if hasattr(lora, 'lokr_w1_b'):
+                    lora.lokr_w1_b.to(device)
+                if hasattr(lora, 'lokr_w2'):
+                    lora.lokr_w2.to(device)
+                if hasattr(lora, 'lokr_w2_a'):
+                    lora.lokr_w2_a.to(device)
+                if hasattr(lora, 'lokr_w2_b'):
+                    lora.lokr_w2_b.to(device)
+                if hasattr(lora, 'lokr_t1'):
+                    lora.lokr_t1.to(device)
+                if hasattr(lora, 'lokr_t2'):
+                    lora.lokr_t2.to(device)
+
+                # loha
+                if hasattr(lora, 'hada_w1_a'):
+                    lora.hada_w1_a.to(device)
+                if hasattr(lora, 'hada_w1_b'):
+                    lora.hada_w1_b.to(device)
+                if hasattr(lora, 'hada_w2_a'):
+                    lora.hada_w2_a.to(device)
+                if hasattr(lora, 'hada_w2_b'):
+                    lora.hada_w2_b.to(device)
+                if hasattr(lora, 'hada_t1'):
+                    lora.hada_t1.to(device)
+                if hasattr(lora, 'hada_t2'):
+                    lora.hada_t2.to(device)
+
+                #abba
+                if hasattr(lora, 'lora_up1'):
+                    lora.lora_up1.to(device)
+                if hasattr(lora, 'lora_down1'):
+                    lora.lora_down1.to(device)
+                if hasattr(lora, 'lora_up2'):
+                    lora.lora_up2.to(device)
+                if hasattr(lora, 'lora_down2'):
+                    lora.lora_down2.to(device)
+
+                #ia3
+                if hasattr(lora, 'weight'):
+                    lora.weight.to(device)
+                
+                #dora
+                if hasattr(lora, 'dora_scale'):
+                    lora.dora_scale.to(device)
+            
+                # Keep original module on CPU
+                lora.org_module[0].cpu()
+                
+                # Ensure dtype consistency
+                lora.dtype_tensor = lora.dtype_tensor.to(device)
+            else:
+                # Standard device placement
+                lora.to(device)
+
 
     def match_fn(self, pattern: str, name: str) -> bool:
         if self.USE_FNMATCH:

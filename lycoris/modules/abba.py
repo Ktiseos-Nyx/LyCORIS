@@ -397,7 +397,11 @@ class AbbaModule(LycorisBaseModule):
                 self._warned_conv = True
 
             diff_weight = self.make_weight(device=x.device)
-            bias = None
+            
+            bias = self.get_org_bias_for_compute(x.device)
+            if bias is not None:
+                bias = bias.to(x.dtype, non_blocking=True)
+
             return self.drop(self.op(x, diff_weight * current_scale, bias, **self.kw_dict))
 
     def forward(self, x):
@@ -415,7 +419,10 @@ class AbbaModule(LycorisBaseModule):
                 # Rebuild mode: merge weights on-the-fly
                 merged_weight, _ = self.get_merged_weight(self.multiplier, device=x.device)
 
-                bias = self.org_module[0].bias
+                bias = self.get_org_bias_for_compute(x.device)
+                if bias is not None:
+                    bias = bias.to(x.dtype, non_blocking=True)
+                    
                 return self.op(self.drop(x), merged_weight, bias, **self.kw_dict)
             elif self.dropout:
                 # 1. Get the original module's output
@@ -437,7 +444,11 @@ class AbbaModule(LycorisBaseModule):
             else:
                 # Rebuild mode: merge weights on-the-fly
                 merged_weight, _ = self.get_merged_weight(self.multiplier, device=x.device)
-                bias = self.org_module[0].bias
+
+                bias = self.get_org_bias_for_compute(x.device)
+                if bias is not None:
+                    bias = bias.to(x.dtype, non_blocking=True)
+
                 return self.op(x, merged_weight, bias, **self.kw_dict)
 
     @torch.no_grad()

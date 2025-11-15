@@ -592,7 +592,7 @@ class LokrModule(LycorisBaseModule):
             return self.bypass_forward(x, self.multiplier)
         else:
             diff_weight = self.get_weight(self.shape).to(self.dtype) * self.scalar
-            weight = self.org_module[0].weight.data.to(self.dtype)
+            weight = self.get_org_weight_for_compute(x.device).data.to(self.dtype, non_blocking=True)
             if self.wd:
                 weight = self.apply_weight_decompose(
                     weight + diff_weight, self.multiplier
@@ -601,11 +601,11 @@ class LokrModule(LycorisBaseModule):
                 weight = weight + diff_weight
             else:
                 weight = weight + diff_weight * self.multiplier
-            bias = (
-                None
-                if self.org_module[0].bias is None
-                else self.org_module[0].bias.data
-            )
+
+            bias = self.get_org_bias_for_compute(x.device)
+            if bias is not None:
+                bias = bias.to(x.dtype, non_blocking=True)
+
             return self.op(x, weight, bias, **self.kw_dict)
 
 

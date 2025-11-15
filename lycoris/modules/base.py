@@ -10,7 +10,12 @@ from ..logging import logger
 from typing import Optional
 import math
 
-from ..utils.general import AID
+try:
+    from ramtorch.modules.linear import CPUBouncingLinear
+    from ramtorch.helpers import transfer_ramtensor_to_device
+except ImportError:
+    CPUBouncingLinear = type(None)
+    transfer_ramtensor_to_device = lambda t, d: t.to(d)
 
 
 class ModuleCustomSD(nn.Module):
@@ -97,8 +102,12 @@ class LycorisBaseModule(ModuleCustomSD):
         self.sum_grads = None
         self.sum_squared_grads = None
 
+        self.is_ramtorch_org = isinstance(org_module, CPUBouncingLinear)
+        if self.is_ramtorch_org:
+            logger.info(f"RamTorch module detected: {lora_name}")
+
         self.module = type(org_module)
-        if isinstance(org_module, nn.Linear):
+        if isinstance(org_module, (nn.Linear, CPUBouncingLinear)):
             self.module_type = "linear"
             self.shape = (org_module.out_features, org_module.in_features)
             self.op = F.linear
@@ -308,6 +317,20 @@ class LycorisBaseModule(ModuleCustomSD):
     @property
     def org_weight(self):
         return self.org_module[0].weight
+    
+    def get_org_weight_for_compute(self, device: torch.device):
+        """Get org_weight on compute device with async transfer if needed"""
+        if self.org_module[0].weight is None:
+            return None
+        weight = self.org_module[0].weight
+        return transfer_ramtensor_to_device(weight, device)
+    
+    def get_org_bias_for_compute(self, device: torch.device):
+        """Get org_bias on compute device with async transfer if needed"""
+        if self.org_module[0].bias is None:
+            return None
+        bias = self.org_module[0].bias
+        return transfer_ramtensor_to_device(bias, device)
 
     @org_weight.setter
     def org_weight(self, value):
