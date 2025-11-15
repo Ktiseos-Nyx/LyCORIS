@@ -460,9 +460,9 @@ class LokrModule(LycorisBaseModule):
         if self.wd:
             destination["dora_scale"] = self.dora_scale
         if self.use_w1:
-            destination["lokr_w1"] = self.lokr_w1 * self.scalar
+            destination["lokr_w1"] = self.lokr_w1 * self.scalar.to(device=self.lokr_w1.device, non_blocking=True)
         else:
-            destination["lokr_w1_a"] = self.lokr_w1_a * self.scalar
+            destination["lokr_w1_a"] = self.lokr_w1_a * self.scalar.to(device=self.lokr_w1_a.device, non_blocking=True)
             destination["lokr_w1_b"] = self.lokr_w1_b
 
         if self.use_w2:

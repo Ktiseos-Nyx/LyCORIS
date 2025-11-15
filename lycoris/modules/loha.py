@@ -275,7 +275,7 @@ class LohaModule(LycorisBaseModule):
         destination["alpha"] = self.alpha
         if self.wd:
             destination["dora_scale"] = self.dora_scale
-        destination["hada_w1_a"] = self.hada_w1_a * self.scalar
+        destination["hada_w1_a"] = self.hada_w1_a * self.scalar.to(device=self.hada_w1_a.device, non_blocking=True)
         destination["hada_w1_b"] = self.hada_w1_b
         destination["hada_w2_a"] = self.hada_w2_a
         destination["hada_w2_b"] = self.hada_w2_b

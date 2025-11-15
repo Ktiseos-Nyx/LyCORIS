@@ -275,7 +275,7 @@ class AbbaModule(LycorisBaseModule):
         
         # Symmetrically bake the sqrt of the scalar into both up weights.
         # This is mathematically equivalent to multiplying the final output by the scalar.
-        sqrt_scalar = torch.sqrt(self.scalar)
+        sqrt_scalar = torch.sqrt(self.scalar.to(device=self.lora_up1.weight.device, non_blocking=True))
         destination["lora_up1.weight"] = self.lora_up1.weight * sqrt_scalar
         destination["lora_down1.weight"] = self.lora_down1.weight
         destination["lora_up2.weight"] = self.lora_up2.weight * sqrt_scalar
