@@ -17,6 +17,7 @@ from .utils import precalculate_safetensors_hashes
 from .modules.abba import AbbaModule
 from .modules.locon import LoConModule
 from .modules.loha import LohaModule
+from .modules.ia3 import IA3Module
 from .modules.lokr import LokrModule
 from .modules.dylora import DyLoraModule
 from .modules.glora import GLoRAModule
@@ -59,6 +60,7 @@ network_module_dict = {
     "abba": AbbaModule,
     "lora": LoConModule,
     "locon": LoConModule,
+    "ia3": IA3Module,
     "loha": LohaModule,
     "lokr": LokrModule,
     "dylora": DyLoraModule,
