@@ -685,6 +685,8 @@ class LycorisNetworkKohya(LycorisNetwork):
                 # oft/boft
                 if hasattr(lora, 'oft_blocks'):
                     lora.oft_blocks.to(device)
+                if hasattr(lora, 'rescale'):
+                    lora.rescale.to(device)
 
                 # lokr
                 if hasattr(lora, 'lokr_w1'):
@@ -737,6 +739,12 @@ class LycorisNetworkKohya(LycorisNetwork):
                     lora.diff.to(device)
                 if hasattr(lora, 'diff_b'):
                     lora.diff_b.to(device)
+
+                #dylora
+                if hasattr(lora, 'up_list'):
+                    lora.up_list.to(device)
+                if hasattr(lora, 'down_list'):
+                    lora.down_list.to(device)
                 
                 #dora
                 if hasattr(lora, 'dora_scale'):
