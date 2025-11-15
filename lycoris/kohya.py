@@ -750,6 +750,11 @@ class LycorisNetworkKohya(LycorisNetwork):
                 if hasattr(lora, 'dora_scale'):
                     lora.dora_scale.to(device)
             
+
+                #scalar
+                if hasattr(lora, 'scalar'):
+                    lora.scalar.to(device)
+
                 # Keep original module on CPU
                 lora.org_module[0].cpu()
                 
