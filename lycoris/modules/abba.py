@@ -361,7 +361,7 @@ class AbbaModule(LycorisBaseModule):
         Returns the full merged weight (original + scaled difference).
         """
         diff, _ = self.get_diff_weight(multiplier, shape, device)
-        weight = self.org_weight
+        weight = self.get_org_weight_for_compute(device).to(self.dtype, non_blocking=True)
         if self.wd:
             merged = self.apply_weight_decompose(weight + diff, multiplier)
         else:
