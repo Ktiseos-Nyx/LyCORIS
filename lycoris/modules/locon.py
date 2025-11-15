@@ -288,7 +288,7 @@ class LoConModule(LycorisBaseModule):
         if self.wd:
             destination["dora_scale"] = self.dora_scale
         destination["alpha"] = self.alpha
-        destination["lora_up.weight"] = self.lora_up.weight * self.scalar
+        destination["lora_up.weight"] = self.lora_up.weight * self.scalar.to(device=self.lora_up.weight.device, non_blocking=True)
         destination["lora_down.weight"] = self.lora_down.weight
         if self.tucker:
             destination["lora_mid.weight"] = self.lora_mid.weight
