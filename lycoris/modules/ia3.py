@@ -97,9 +97,9 @@ class IA3Module(LycorisBaseModule):
     def make_weight(self, multiplier=1, shape=None, device=None, diff=False):
         weight = self.weight * multiplier + int(not diff)
         if self.train_input:
-            diff = self.org_weight * weight
+            diff = self.get_org_weight_for_compute(device).to(self.dtype, non_blocking=True) * weight
         else:
-            diff = self.org_weight.transpose(0, 1) * weight
+            diff = self.get_org_weight_for_compute(device).to(self.dtype, non_blocking=True).transpose(0, 1) * weight
             diff = diff.transpose(0, 1)
         if shape is not None:
             diff = diff.view(shape)
@@ -139,7 +139,7 @@ class IA3Module(LycorisBaseModule):
         if self.bypass_mode:
             return self.bypass_forward(x, self.multiplier)
         else:
-            weight = self.get_merged_weight(multiplier=self.multiplier)[0]
+            weight = self.get_merged_weight(multiplier=self.multiplier, device=x.device)[0]
 
             bias = self.get_org_bias_for_compute(x.device)
             if bias is not None:
