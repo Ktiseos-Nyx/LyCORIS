@@ -195,9 +195,9 @@ class GLoRAModule(LycorisBaseModule):
         destination = {}
         destination["alpha"] = self.alpha
         destination["a1.weight"] = self.a1.weight
-        destination["a2.weight"] = self.a2.weight * self.scalar.to(device=self.a2.weight.device, non_blocking=True)
+        destination["a2.weight"] = self.a2.weight * self.scalar.to(device=self.a2.weight.device)
         destination["b1.weight"] = self.b1.weight
-        destination["b2.weight"] = self.b2.weight * self.scalar.to(device=self.b2.weight.device, non_blocking=True)
+        destination["b2.weight"] = self.b2.weight * self.scalar.to(device=self.b2.weight.device)
         if self.tucker:
             destination["bm.weight"] = self.bm.weight
         return destination
@@ -322,14 +322,19 @@ class GLoRAModule(LycorisBaseModule):
         if self.bypass_mode:
             return self.bypass_forward(x, self.multiplier)
         else:
-            weight = (
-                self.get_org_weight_for_compute(x.device).data.to(self.dtype, non_blocking=True)
-                + self.get_diff_weight(multiplier=self.multiplier, device=x.device)[0]
-            )
+            weight = self.get_org_weight_for_compute(x.device)
+
+            # Ensure correct dtype
+            if weight.dtype != self.dtype:
+                weight = weight.to(self.dtype)
+
+            diff_w, _ = self.get_diff_weight(multiplier=self.multiplier, device=x.device)
+
+            weight.add_(diff_w)
 
             bias = self.get_org_bias_for_compute(x.device)
             if bias is not None:
-                bias = bias.to(self.dtype, non_blocking=True).data
+                bias = bias.to(self.dtype)
 
             if self.dropout:
                 x = self.drop(x)
