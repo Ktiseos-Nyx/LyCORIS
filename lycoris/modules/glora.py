@@ -330,7 +330,7 @@ class GLoRAModule(LycorisBaseModule):
 
             diff_w, _ = self.get_diff_weight(multiplier=self.multiplier, device=x.device)
 
-            weight.add_(diff_w)
+            weight = weight.add(diff_w)
 
             bias = self.get_org_bias_for_compute(x.device)
             if bias is not None:
