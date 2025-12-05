@@ -3,7 +3,7 @@ from functools import cache
 import torch
 import torch.nn as nn
 
-from .base import LycorisBaseModule
+from .base import LycorisBaseModule, transfer_ramtensor_to_device
 from ..logging import logger
 
 from typing import Optional
@@ -106,6 +106,23 @@ class FullModule(LycorisBaseModule):
     @property
     def org_weight(self):
         return self._org_weight[0]
+    
+    def get_org_weight_for_compute(self, device: torch.device):
+        """
+        Overrides base method. 
+        FullModule stores original weights in self._org_weight list (CPU)
+        and deletes the attribute from the original module.
+        """
+        # _org_weight is a list containing the CPU tensor
+        return transfer_ramtensor_to_device(self._org_weight[0], device)
+
+    def get_org_bias_for_compute(self, device: torch.device):
+        """
+        Overrides base method for bias.
+        """
+        if self.org_bias is None:
+            return None
+        return transfer_ramtensor_to_device(self.org_bias[0], device)
 
     @org_weight.setter
     def org_weight(self, value):
@@ -161,9 +178,20 @@ class FullModule(LycorisBaseModule):
         )
         if drop != 1 or scale != 1 or self.is_diff:
             diff_w, diff_b = self.get_diff_weight(scale, device=device)
-            weight = self.org_weight + diff_w * drop
+
+            org_weight = self.get_org_weight_for_compute(device)
+            
+            # Ensure dtypes match (specifically for cases like bf16 mixed training)
+            if org_weight.dtype != diff_w.dtype:
+                org_weight = org_weight.to(diff_w.dtype)
+                
+            weight = org_weight + diff_w * drop
+            
             if self.org_bias is not None:
-                bias = self.org_bias + diff_b * drop
+                org_bias = self.get_org_bias_for_compute(device)
+                if org_bias.dtype != diff_b.dtype:
+                    org_bias = org_bias.to(diff_b.dtype)
+                bias = org_bias + diff_b * drop
             else:
                 bias = None
         else:
@@ -178,12 +206,18 @@ class FullModule(LycorisBaseModule):
                 diff_b = self.bias * multiplier
             return self.weight * multiplier, diff_b
         org_weight = self.get_org_weight_for_compute(device).to(self.weight.dtype, non_blocking=True)
+        if org_weight.dtype != self.weight.dtype:
+            org_weight = org_weight.to(self.weight.dtype)
+
         diff = self.weight.to(device) - org_weight
         diff_b = None
         if shape:
             diff = diff.view(shape)
         if self.bias is not None:
-            org_bias = self.get_org_bias_for_compute(device).to(dtype=self.bias.dtype, non_blocking=True)
+            org_bias = self.get_org_bias_for_compute(device)
+            if org_bias.dtype != diff_b.dtype:
+                org_bias = org_bias.to(self.bias.dtype)
+
             diff_b = self.bias.to(device) - org_bias
         if device is not None:
             diff = diff.to(device)

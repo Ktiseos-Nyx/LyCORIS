@@ -424,7 +424,12 @@ class LokrModule(LycorisBaseModule):
 
     def get_merged_weight(self, multiplier=1, shape=None, device=None):
         diff = self.get_diff_weight(multiplier=1, shape=shape, device=device)[0]
-        weight = self.org_weight
+        
+        weight = self.get_org_weight_for_compute(diff.device)
+
+        if weight.dtype != diff.dtype:
+            weight = weight.to(diff.dtype)
+
         if self.wd:
             merged = self.apply_weight_decompose(weight + diff, multiplier)
         else:

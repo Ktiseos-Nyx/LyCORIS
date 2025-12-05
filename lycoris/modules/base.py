@@ -86,6 +86,9 @@ def transfer_ramtensor_to_device(tensor_cpu: torch.Tensor, device: torch.device)
     """
     if not getattr(tensor_cpu, 'is_ramtorch', False):
         return tensor_cpu.to(device, non_blocking=True)
+    
+    if device.type == 'cpu':
+        return tensor_cpu
 
     if device not in _STREAMERS:
         _STREAMERS[device] = AsyncTensorStreamer(device)

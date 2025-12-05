@@ -131,7 +131,13 @@ class DyLoraModule(LycorisBaseModule):
 
     def get_merged_weight(self, multiplier=1, shape=None, device=None, rank=None):
         diff, _ = self.get_diff_weight(multiplier, shape, device, rank)
-        return diff + self.org_weight, None
+
+        weight = self.get_org_weight_for_compute(diff.device)
+
+        if weight.dtype != diff.dtype:
+            weight = weight.to(diff.dtype)
+
+        return diff + weight, None
 
     def bypass_forward_diff(self, x, scale=1, rank=None):
         if rank is None:

@@ -220,7 +220,10 @@ class GLoRAModule(LycorisBaseModule):
         wa1 = self._orthogonalize(self.a1.weight.to(device)).view(self.a1.weight.size(0), -1)
         wa2 = self._orthogonalize(self.a2.weight.to(device)).view(self.a2.weight.size(0), -1)
 
-        orig = self.org_weight.to(device=device, dtype=wa1.dtype)
+        orig = self.get_org_weight_for_compute(device)
+
+        if orig.dtype != wa1.dtype:
+            orig = orig.to(wa1.dtype)
 
         if self.tucker:
             wb1 = self._orthogonalize(self.b1.weight.to(device))
@@ -247,7 +250,13 @@ class GLoRAModule(LycorisBaseModule):
 
     def get_merged_weight(self, multiplier=1, shape=None, device=None):
         diff_w, _ = self.get_diff_weight(multiplier, shape, device)
-        return self.org_weight + diff_w, None
+
+        weight = self.get_org_weight_for_compute(diff_w.device)
+
+        if weight.dtype != diff_w.dtype:
+            weight = weight.to(diff_w.dtype)
+
+        return weight + diff_w, None
 
     def _bypass_forward(self, x, scale=1, diff=False):
         scale = self.scale * scale
