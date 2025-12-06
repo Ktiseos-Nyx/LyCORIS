@@ -9,7 +9,7 @@ from .base import LycorisBaseModule
 from ..functional.general import tucker_weight_from_conv
 from ..logging import logger
 
-from .base import LycorisBaseModule
+from .base import LycorisBaseModule, transfer_ramtensor_to_device
 
 @cache
 def log_glora_drop():
@@ -261,17 +261,34 @@ class GLoRAModule(LycorisBaseModule):
     def _bypass_forward(self, x, scale=1, diff=False):
         scale = self.scale * scale
         
-        # Orthogonalize all weights on the fly
-        wa1 = self._orthogonalize(self.a1.weight).to(x.device, dtype=x.dtype)
-        wa2 = self._orthogonalize(self.a2.weight).to(x.device, dtype=x.dtype)
-        wb1 = self._orthogonalize(self.b1.weight).to(x.device, dtype=x.dtype)
-        wb2 = self._orthogonalize(self.b2.weight).to(x.device, dtype=x.dtype)
+        # Helper check for RamTorch compatibility
+        def is_rt(mod): return getattr(mod, "is_ramtorch", False)
         
-        # Branch A calculation
-        ax_mid = self.down_op(x, wa2) * scale
+        # Helper to get weight to device (handling RamTorch if needed)
+        # This is used when we MUST manually calculate (e.g. for Orthogonalization)
+        def get_w(mod):
+            if is_rt(mod):
+                return transfer_ramtensor_to_device(mod.weight, x.device)
+            return mod.weight
+
+        # Branch A (Down)
+        if is_rt(self.a2) and not self.use_orthogonal_weights:
+            # OPTIMIZED PATH: Use RamTorch module direct call (handles async transfer + custom gradient)
+            ax_mid = self.a2(x) * scale
+        else:
+            # MANUAL PATH: Transfer weight -> Orthogonalize -> Functional Op
+            # This relies on PyTorch's native autograd (CopyBackward) for gradients.
+            w = get_w(self.a2)
+            wa2 = self._orthogonalize(w).to(x.device, dtype=x.dtype)
+            ax_mid = self.down_op(x, wa2) * scale
         
-        # Branch B calculation
-        bx_mid = self.down_op(x, wb2) * scale
+        # Branch B (Down)
+        if is_rt(self.b2) and not self.use_orthogonal_weights:
+            bx_mid = self.b2(x) * scale
+        else:
+            w = get_w(self.b2)
+            wb2 = self._orthogonalize(w).to(x.device, dtype=x.dtype)
+            bx_mid = self.down_op(x, wb2) * scale
 
         if self.rank_dropout and self.training:
             drop_a = (
@@ -292,32 +309,48 @@ class GLoRAModule(LycorisBaseModule):
             ax_mid = ax_mid * drop_a
             bx_mid = bx_mid * drop_b
             
-        # Finish branch A
-        ax = self.up_op(ax_mid, wa1)
+        # Finish branch A (Up)
+        if is_rt(self.a1) and not self.use_orthogonal_weights:
+            ax = self.a1(ax_mid)
+        else:
+            w = get_w(self.a1)
+            wa1 = self._orthogonalize(w).to(x.device, dtype=x.dtype)
+            ax = self.up_op(ax_mid, wa1)
 
         # Finish branch B
         if self.tucker:
-            wbm = self._orthogonalize(self.bm.weight)
-            # Use functional call for the middle convolution
-            bx_mid = self.op(
-                bx_mid,
-                wbm,
-                bias=None,
-                stride=self.bm.stride,
-                padding=self.bm.padding,
-                dilation=self.bm.dilation,
-                groups=self.bm.groups,
-            )
-        bx = self.up_op(bx_mid, wb1)
+            if is_rt(self.bm) and not self.use_orthogonal_weights:
+                bx_mid = self.bm(bx_mid)
+            else:
+                w = get_w(self.bm)
+                wbm = self._orthogonalize(w)
+                # Use functional call for the middle convolution
+                bx_mid = self.op(
+                    bx_mid,
+                    wbm,
+                    bias=None,
+                    stride=self.bm.stride,
+                    padding=self.bm.padding,
+                    dilation=self.bm.dilation,
+                    groups=self.bm.groups,
+                )
+
+        # Finish branch B (Up)
+        if is_rt(self.b1) and not self.use_orthogonal_weights:
+            bx = self.b1(bx_mid)
+        else:
+            w = get_w(self.b1)
+            wb1 = self._orthogonalize(w).to(x.device, dtype=x.dtype)
+            bx = self.up_op(bx_mid, wb1)
 
         # W(X + A(X)) + B(X)
         return (
             self.org_forward(
-                (0 if diff else x) + self.drop(ax) * self.scale
+                (0 if diff else x) + self.drop(ax) * self.scale * self.scalar
             )
-            + self.drop(bx) * self.scale
+            + self.drop(bx) * self.scale * self.scalar
         )
-
+    
     def bypass_forward_diff(self, x, scale=1):
         return self._bypass_forward(x, scale=scale, diff=True)
 
@@ -328,7 +361,12 @@ class GLoRAModule(LycorisBaseModule):
         if self.module_dropout and self.training:
             if torch.rand(1) < self.module_dropout:
                 return self.org_forward(x)
-        if self.bypass_mode:
+            
+        # Check if we are using RamTorch modules. 
+        # If so, we MUST use bypass_forward to trigger the correct bouncing logic.
+        is_ramtorch = getattr(self.a1, "is_ramtorch", False)
+
+        if self.bypass_mode or is_ramtorch:
             return self.bypass_forward(x, self.multiplier)
         else:
             weight = self.get_org_weight_for_compute(x.device)
