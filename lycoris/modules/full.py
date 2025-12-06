@@ -131,11 +131,22 @@ class FullModule(LycorisBaseModule):
     def apply_to(self, **kwargs):
         self.org_forward = self.org_module[0].forward
         self.org_module[0].forward = self.forward
-        self.weight.data.add_(self.org_module[0].weight.data)
+
+        org_weight = self.org_module[0].weight.data
+        if org_weight.device != self.weight.device:
+            org_weight = org_weight.to(self.weight.device)
+            
+        self.weight.data.add_(org_weight)
+        
         self._org_weight = [self.org_module[0].weight.data.cpu().clone()]
         delattr(self.org_module[0], "weight")
+        
         if self.org_module[0].bias is not None:
-            self.bias.data.add_(self.org_module[0].bias.data)
+            org_bias = self.org_module[0].bias.data
+            if org_bias.device != self.bias.device:
+                org_bias = org_bias.to(self.bias.device)
+                
+            self.bias.data.add_(org_bias)
             self.org_bias = [self.org_module[0].bias.data.cpu().clone()]
             delattr(self.org_module[0], "bias")
         else:
@@ -197,6 +208,12 @@ class FullModule(LycorisBaseModule):
         else:
             weight = self.weight
             bias = self.bias
+            
+            if device is not None:
+                if weight.device != device:
+                    weight = weight.to(device)
+                if bias is not None and bias.device != device:
+                    bias = bias.to(device)
         return weight, bias
 
     def get_diff_weight(self, multiplier=1, shape=None, device=None):
