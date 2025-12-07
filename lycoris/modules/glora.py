@@ -217,11 +217,8 @@ class GLoRAModule(LycorisBaseModule):
             )
 
     def make_weight(self, device=None):
-        wa1 = transfer_ramtensor_to_device(self.a1.weight, device=device)
-        wa2 = transfer_ramtensor_to_device(self.a2.weight, device=device)
-
-        wa1 = self._orthogonalize(wa1).view(wa1.size(0), -1)
-        wa2 = self._orthogonalize(wa2).view(wa2.size(0), -1)
+        wa1 = self._orthogonalize(self.a1.weight.to(device)).view(self.a1.weight.size(0), -1)
+        wa2 = self._orthogonalize(self.a2.weight.to(device)).view(self.a2.weight.size(0), -1)
 
         orig = self.get_org_weight_for_compute(device)
 
@@ -229,16 +226,13 @@ class GLoRAModule(LycorisBaseModule):
             orig = orig.to(wa1.dtype)
 
         if self.tucker:
-            wb1 = self._orthogonalize(transfer_ramtensor_to_device(self.b1.weight, device=device))
-            wb2 = self._orthogonalize(transfer_ramtensor_to_device(self.b2.weight, device=device))
-            wbm = self._orthogonalize(transfer_ramtensor_to_device(self.bm.weight, device=device))
+            wb1 = self._orthogonalize(self.b1.weight.to(device))
+            wb2 = self._orthogonalize(self.b2.weight.to(device))
+            wbm = self._orthogonalize(self.bm.weight.to(device))
             wb = tucker_weight_from_conv(wb1, wb2, wbm)
         else:
-            wb1 = transfer_ramtensor_to_device(self.b1.weight, device=device)
-            wb2 = transfer_ramtensor_to_device(self.b2.weight, device=device)
-
-            wb1 = self._orthogonalize(wb1).view(wb1.size(0), -1)
-            wb2 = self._orthogonalize(wb2).view(wb2.size(0), -1)
+            wb1 = self._orthogonalize(self.b1.weight.to(device)).view(self.b1.weight.size(0), -1)
+            wb2 = self._orthogonalize(self.b2.weight.to(device)).view(self.b2.weight.size(0), -1)
             wb = wb1 @ wb2
             wb = wb.view(*orig.shape)
         if orig.dim() > 2:

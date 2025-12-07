@@ -80,12 +80,16 @@ class AsyncTensorStreamer:
 _STREAMERS = {}
 
 def transfer_ramtensor_to_device(tensor_cpu: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """
+    Args:
+        tensor_id: Used for debugging/logging, but no longer used for memory allocation keys.
+    """
     if not getattr(tensor_cpu, 'is_ramtorch', False):
         return tensor_cpu.to(device, non_blocking=True)
     
-    if device is None or device.type == 'cpu':
+    if device.type == 'cpu':
         return tensor_cpu
-    
+
     if device not in _STREAMERS:
         _STREAMERS[device] = AsyncTensorStreamer(device)
     
