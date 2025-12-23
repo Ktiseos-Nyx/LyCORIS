@@ -240,7 +240,7 @@ class GLoRAModule(LycorisBaseModule):
             w_wa2 = torch.einsum("o i ..., i j -> o j ...", w_wa1, wa2)
         else:
             w_wa2 = (orig @ wa1) @ wa2
-        return (wb + w_wa2) * self.scale * self.scalar
+        return (wb + w_wa2) * self.scale * self.scalar.to(device=device)
 
     def get_diff_weight(self, multiplier=1.0, shape=None, device=None):
         weight = self.make_weight(device) * multiplier
@@ -342,11 +342,14 @@ class GLoRAModule(LycorisBaseModule):
             weight = weight.add(diff_w)
 
             bias = self.get_org_bias_for_compute(x.device)
-            if bias is not None:
-                bias = bias.to(self.dtype)
 
             if self.dropout:
                 x = self.drop(x)
+
+            if weight.dtype != x.dtype:
+                weight = weight.to(x.dtype)
+            if bias is not None and bias.dtype != x.dtype:
+                bias = bias.to(x.dtype)
 
             result = self.op(x, weight, bias, **self.kw_dict)
 
