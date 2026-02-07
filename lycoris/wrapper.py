@@ -120,6 +120,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     torch_compile_mode = kwargs.get("torch_compile_mode", "max-autotune")
     torch_compile_dynamic = str_bool(kwargs.get("torch_compile_dynamic", False))
     torch_compile_fullgraph = str_bool(kwargs.get("torch_compile_fullgraph", True))
+    train_llm_adapter = str_bool(kwargs.get("train_llm_adapter", False))
 
     ggpo_beta = kwargs.get("ggpo_beta", None)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
@@ -204,6 +205,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         ggpo_sigma=ggpo_sigma,
         ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
         orthogonalize=orthogonalize,
+        train_llm_adapter=train_llm_adapter,
     )
 
     if torch_compile:
@@ -321,6 +323,7 @@ class LycorisNetwork(torch.nn.Module):
         norm_modules=NormModule,
         train_norm=False,
         init_only=False,
+        train_llm_adapter=False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -362,6 +365,7 @@ class LycorisNetwork(torch.nn.Module):
             return
         self.multiplier = multiplier
         self.lora_dim = lora_dim
+        self.train_llm_adapter = train_llm_adapter
 
         if not self.ENABLE_CONV:
             conv_lora_dim = 0
@@ -442,10 +446,6 @@ class LycorisNetwork(torch.nn.Module):
                 self.rank_dropout,
                 self.module_dropout,
                 use_tucker,
-                self.ggpo_beta,
-                self.ggpo_sigma,
-                self.ggpo_conv,
-                self.ggpo_conv_weight_sample_size,
                 **kwargs,
             )
             return lora
@@ -564,17 +564,21 @@ class LycorisNetwork(torch.nn.Module):
                         loras.append(lora)
             return loras
 
+        target_replace_modules = list(
+            set(
+                [
+                    *LycorisNetwork.TARGET_REPLACE_MODULE,
+                    *LycorisNetwork.MODULE_ALGO_MAP.keys(),
+                ]
+            )
+        )
+        if self.train_llm_adapter:
+            target_replace_modules.append("LLMAdapterTransformerBlock")
+            
         self.loras = create_modules(
             LycorisNetwork.LORA_PREFIX,
             module,
-            list(
-                set(
-                    [
-                        *LycorisNetwork.TARGET_REPLACE_MODULE,
-                        *LycorisNetwork.MODULE_ALGO_MAP.keys(),
-                    ]
-                )
-            ),
+            target_replace_modules,
             list(
                 set(
                     [

@@ -90,6 +90,7 @@ def create_network(
     torch_compile_mode = kwargs.get("torch_compile_mode", "max-autotune")
     torch_compile_dynamic = str_bool(kwargs.get("torch_compile_dynamic", False))
     torch_compile_fullgraph = str_bool(kwargs.get("torch_compile_fullgraph", True))
+    train_llm_adapter = str_bool(kwargs.get("train_llm_adapter", False))
     
     ggpo_beta = kwargs.get("ggpo_beta", None)
     ggpo_sigma = kwargs.get("ggpo_sigma", None)
@@ -193,6 +194,7 @@ def create_network(
         ggpo_conv=ggpo_conv,
         ggpo_conv_weight_sample_size=ggpo_conv_weight_sample_size,
         orthogonalize=orthogonalize,
+        train_llm_adapter=train_llm_adapter,
     )
     if (
         loraplus_lr_ratio is not None
@@ -392,6 +394,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         norm_modules=NormModule,
         train_norm=False,
         train_t5xxl=False,
+        train_llm_adapter=False,
         **kwargs,
     ) -> None:
         torch.nn.Module.__init__(self)
@@ -399,6 +402,7 @@ class LycorisNetworkKohya(LycorisNetwork):
         self.multiplier = multiplier
         self.lora_dim = lora_dim
         self.train_t5xxl = train_t5xxl
+        self.train_llm_adapter = train_llm_adapter
         self._current_step = 0
 
         self.ggpo_beta = kwargs.get("ggpo_beta", None)
@@ -631,10 +635,14 @@ class LycorisNetworkKohya(LycorisNetwork):
                 f"create LyCORIS for Text Encoder: {len(self.text_encoder_loras)} modules."
             )
 
+        unet_target_modules = list(LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE)
+        if self.train_llm_adapter:
+            unet_target_modules.append("LLMAdapterTransformerBlock")
+
         self.unet_loras = create_modules(
             LycorisNetworkKohya.LORA_PREFIX_UNET,
             unet,
-            LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE,
+            unet_target_modules,
             LycorisNetworkKohya.UNET_TARGET_REPLACE_NAME,
         )
         logger.info(f"create LyCORIS for U-Net: {len(self.unet_loras)} modules.")
