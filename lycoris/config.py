@@ -18,6 +18,7 @@ PRESET = {
             "JointTransformerBlock", # lumina-image-2
             "FinalLayer", # lumina-image-2
             "QwenImageTransformerBlock", # Qwen
+            "Block", # Anima?
         ],
         "unet_target_name": [
             "conv_in",
@@ -35,6 +36,10 @@ PRESET = {
             "Gemma2FlashAttention2",
             "Gemma2SdpaAttention",
             "Gemma2MLP",
+            "Qwen3Attention",
+            "Qwen3MLP",
+            "Qwen3SdpaAttention",
+            "Qwen3FlashAttention2",
         ],
         "text_encoder_target_name": [],
     },
@@ -55,6 +60,7 @@ PRESET = {
             "JointTransformerBlock", # lumina-image-2
             "FinalLayer", # lumina-image-2
             "QwenImageTransformerBlock", # Qwen
+            "Block", # Anima?
         ],
         "unet_target_name": [
             "time_embedding.linear_1",
@@ -70,6 +76,10 @@ PRESET = {
             "Gemma2FlashAttention2",
             "Gemma2SdpaAttention",
             "Gemma2MLP",
+            "Qwen3Attention",
+            "Qwen3MLP",
+            "Qwen3SdpaAttention",
+            "Qwen3FlashAttention2",
         ],
         "text_encoder_target_name": [],
     },
@@ -89,6 +99,7 @@ PRESET = {
             "JointTransformerBlock", # lumina-image-2
             "FinalLayer", # lumina-image-2
             "QwenImageTransformerBlock", # Qwen
+            "Block", # Anima?
         ],
         "unet_target_name": [],
         "text_encoder_target_module": [
@@ -101,6 +112,10 @@ PRESET = {
             "Gemma2FlashAttention2",
             "Gemma2SdpaAttention",
             "Gemma2MLP",
+            "Qwen3Attention",
+            "Qwen3MLP",
+            "Qwen3SdpaAttention",
+            "Qwen3FlashAttention2",
         ],
         "text_encoder_target_name": [],
     },
@@ -119,6 +134,9 @@ PRESET = {
             "Gemma2Attention",
             "Gemma2FlashAttention2",
             "Gemma2SdpaAttention",
+            "Qwen3Attention",
+            "Qwen3SdpaAttention",
+            "Qwen3FlashAttention2",
         ],
         "text_encoder_target_name": [],
     },
@@ -141,6 +159,7 @@ PRESET = {
             "JointTransformerBlock", # lumina-image-2
             "FinalLayer", # lumina-image-2
             "QwenImageTransformerBlock", # Qwen
+            "Block", # Anima?
         ],
         "unet_target_name": [
             "conv_in",
@@ -167,6 +186,7 @@ PRESET = {
             "JointTransformerBlock", # lumina-image-2
             "FinalLayer", # lumina-image-2
             "QwenImageTransformerBlock", # Qwen
+            "Block", # Anima?
         ],
         "unet_target_name": [],
         "text_encoder_target_module": [],
