@@ -496,12 +496,12 @@ class TLoraModule(LycorisBaseModule):
 
         if self.isconv:
             # Current path: x -> Q -> scale by λ -> P
-            q_out = self.down_op(x, self.q_layer.weight.to(dtype), None, **self.kw_dict_up)
+            q_out = self.down_op(x, self.q_layer.weight.to(dtype), None, **self.kw_dict_down)
             q_out_scaled = q_out * lam.view(1, -1, *([1] * (q_out.dim() - 2)))
             curr_out = self.up_op(q_out_scaled, self.p_layer.weight.to(dtype), None, **self.kw_dict_up)
 
             # Base path
-            q_base_out = self.down_op(x, self.base_q.to(dtype), None, **self.kw_dict_up)
+            q_base_out = self.down_op(x, self.base_q.to(dtype), None, **self.kw_dict_down)
             q_base_scaled = q_base_out * lam_base.view(1, -1, *([1] * (q_base_out.dim() - 2)))
             base_out = self.up_op(q_base_scaled, self.base_p.to(dtype), None, **self.kw_dict_up)
         else:
