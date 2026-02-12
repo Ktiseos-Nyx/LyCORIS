@@ -354,15 +354,11 @@ class TLoraModule(LycorisBaseModule):
             multiplier=1.0,
             lora_dim=lora_dim,
             alpha=float(alpha),
-            use_data_init=False,  # Don't re-init, we'll load weights
+            use_data_init=True,
         )
         module.q_layer.weight.data.copy_(q_weight)
         module.p_layer.weight.data.copy_(p_weight)
         module.lambda_layer.data.copy_(lambda_weight)
-        # Update base buffers to match loaded weights
-        module.base_q.copy_(q_weight)
-        module.base_p.copy_(p_weight)
-        module.base_lambda.copy_(lambda_weight)
         return module
 
     def custom_state_dict(self):
