@@ -25,6 +25,7 @@ from .modules.norms import NormModule
 from .modules.full import FullModule
 from .modules.diag_oft import DiagOFTModule
 from .modules.boft import ButterflyOFTModule
+from .modules.tlora import TLoraModule
 from .modules import get_module, make_module
 
 from .config import PRESET
@@ -68,6 +69,7 @@ network_module_dict = {
     "full": FullModule,
     "diag-oft": DiagOFTModule,
     "boft": ButterflyOFTModule,
+    "tlora": TLoraModule,
 }
 deprecated_arg_dict = {
     "disable_conv_cp": "use_tucker",
