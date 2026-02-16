@@ -168,6 +168,22 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
     assert preset is not None
     LycorisNetwork.apply_preset(preset)
 
+    # Auto-add Anima embedding modules when "Block" is targeted
+    _is_anima = False
+    if isinstance(module, torch.nn.Module):
+        _is_anima = module.__class__.__name__.lower() == "anima"
+    if _is_anima:
+        # Check both wrapper-style (target_module) and kohya-style (unet_target_module)
+        _has_block = "Block" in LycorisNetwork.TARGET_REPLACE_MODULE
+        if isinstance(preset, dict):
+            _has_block = _has_block or "Block" in preset.get("unet_target_module", [])
+        if _has_block:
+            anima_extra_modules = ["PatchEmbed", "TimestepEmbedding"]
+            for m in anima_extra_modules:
+                if m not in LycorisNetwork.TARGET_REPLACE_MODULE:
+                    LycorisNetwork.TARGET_REPLACE_MODULE.append(m)
+            logger.info(f"Anima model detected: added {anima_extra_modules} to target modules")
+
     logger.info(f"Using rank adaptation algo: {algo}")
 
     if torch_compile:

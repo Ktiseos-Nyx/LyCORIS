@@ -151,6 +151,17 @@ def create_network(
     assert preset is not None
     LycorisNetworkKohya.apply_preset(preset)
 
+    # Auto-add Anima embedding modules when "Block" is targeted
+    _is_anima = False
+    if isinstance(unet, torch.nn.Module):
+        _is_anima = unet.__class__.__name__.lower() == "anima"
+    if _is_anima and "Block" in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
+        anima_extra_modules = ["PatchEmbed", "TimestepEmbedding"]
+        for m in anima_extra_modules:
+            if m not in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
+                LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE.append(m)
+        logger.info(f"Anima model detected: added {anima_extra_modules} to target modules")
+
     logger.info(f"Using rank adaptation algo: {algo}")
 
     if algo == "ia3" and preset_str != "ia3":
