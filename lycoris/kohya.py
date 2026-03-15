@@ -25,6 +25,7 @@ from .modules.norms import NormModule
 from .modules.full import FullModule
 from .modules.diag_oft import DiagOFTModule
 from .modules.boft import ButterflyOFTModule
+from .modules.tlora import TLoraModule
 from .modules import make_module, get_module
 
 from .config import PRESET
@@ -753,6 +754,20 @@ class LycorisNetworkKohya(LycorisNetwork):
                     lora.lora_up2.to(device)
                 if hasattr(lora, 'lora_down2'):
                     lora.lora_down2.to(device)
+
+                #tlora
+                if hasattr(lora, 'q_layer'):
+                    lora.q_layer.to(device)
+                if hasattr(lora, 'p_layer'):
+                    lora.p_layer.to(device)
+                if hasattr(lora, 'lambda_layer'):
+                    lora.lambda_layer.data = lora.lambda_layer.data.to(device)
+                if hasattr(lora, 'base_q'):
+                    lora.base_q = lora.base_q.to(device)
+                if hasattr(lora, 'base_p'):
+                    lora.base_p = lora.base_p.to(device)
+                if hasattr(lora, 'base_lambda'):
+                    lora.base_lambda = lora.base_lambda.to(device)
 
                 #ia3
                 if hasattr(lora, 'weight'):

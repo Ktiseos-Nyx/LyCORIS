@@ -115,6 +115,9 @@ class TLoraModule(LycorisBaseModule):
         "p_layer.weight",
         "lambda_layer",
         "alpha",
+        "base_q",
+        "base_p",
+        "base_lambda",
     ]
     weight_list_det = ["lambda_layer"]  # Unique identifier for T-LoRA
 
@@ -128,22 +131,38 @@ class TLoraModule(LycorisBaseModule):
         dropout: float = 0.0,
         rank_dropout: float = 0.0,
         module_dropout: float = 0.0,
+        use_tucker: bool = False,
+        use_scalar: bool = False,
         rank_dropout_scale: bool = False,
         bypass_mode: bool = None,
         sig_type: SigType = "principal",
         use_data_init: bool = True,
         mask_group_id: int = 0,
+        ggpo_beta: Optional[float] = None,
+        ggpo_sigma: Optional[float] = None,
+        ggpo_conv: bool = False,
+        ggpo_conv_weight_sample_size: int = 100,
         **kwargs,
     ):
         """
         Initialize T-LoRA module.
+
+        Note on alpha scaling: The original T-LoRA paper applies NO alpha/dim
+        scaling. To match the original behavior, set alpha=lora_dim (i.e.
+        --network_alpha equal to --network_dim). The LyCORIS default alpha=1
+        applies a 1/dim scaling factor for consistency with other LyCORIS algos.
+
+        Note on sig_type: The original T-LoRA uses "last" for random init
+        (OrthogonalLoRALinearLayer) and "principal" for data-dependent init
+        (LOrthogonalLoRALinearLayer). The default here is "principal" to match
+        the data-dependent variant (use_data_init=True).
 
         Args:
             lora_name: Unique name for this LoRA module
             org_module: Original module to wrap
             multiplier: Output multiplier
             lora_dim: Rank of the LoRA decomposition
-            alpha: Alpha scaling factor
+            alpha: Alpha scaling factor (set equal to lora_dim to match original T-LoRA)
             dropout: Dropout probability
             rank_dropout: Rank-wise dropout probability
             module_dropout: Module-level dropout probability
@@ -162,17 +181,28 @@ class TLoraModule(LycorisBaseModule):
             module_dropout,
             rank_dropout_scale,
             bypass_mode,
+            ggpo_beta,
+            ggpo_sigma,
+            ggpo_conv,
+            ggpo_conv_weight_sample_size,
         )
 
         if self.module_type not in self.support_module:
             raise ValueError(f"{self.module_type} is not supported in T-LoRA algo.")
 
+        self.use_orthogonal_weights = False
         self.lora_dim = lora_dim
         self.sig_type = sig_type
         self.use_data_init = use_data_init
         self.mask_group_id = mask_group_id
 
         log_tlora_init()
+
+        if rank_dropout:
+            logger.warning(
+                "T-LoRA: rank_dropout is ignored. The timestep mask provides "
+                "structured rank selection; random rank dropout would undermine it."
+            )
 
         # Determine dimensions based on module type
         if self.module_type.startswith("conv"):
@@ -194,14 +224,16 @@ class TLoraModule(LycorisBaseModule):
             self.q_layer = self.module(in_dim, lora_dim, 1, bias=False)
             self.p_layer = self.module(lora_dim, out_dim, 1, bias=False)
 
-            # Store original conv params for the actual forward
+            # Store conv params for the actual forward
+            # Q is a 1x1 conv: use original stride for spatial downsampling,
+            # but padding=0 and dilation=1 since kernel is 1x1
             self.down_op = self.op
             self.up_op = self.op
             self.kw_dict_down = {
                 "stride": stride,
-                "padding": padding,
-                "dilation": org_module.dilation,
-                "groups": org_module.groups,
+                "padding": (0,) * len(k_size),
+                "dilation": (1,) * len(k_size),
+                "groups": 1,
             }
             self.kw_dict_up = {
                 "stride": (1,) * len(k_size),
@@ -238,11 +270,13 @@ class TLoraModule(LycorisBaseModule):
         self.scale = alpha / lora_dim
         self.register_buffer("alpha", torch.tensor(alpha))
 
-        # Dropout
-        if dropout:
-            self.dropout = nn.Dropout(dropout)
+        # Scalar: learnable global magnitude. Initialized to 1.0 (not 0.0)
+        # because T-LoRA's residual subtraction already ensures zero init;
+        # scalar=0.0 would create dead gradients.
+        if use_scalar:
+            self.scalar = nn.Parameter(torch.tensor(1.0))
         else:
-            self.dropout = nn.Identity()
+            self.register_buffer("scalar", torch.tensor(1.0), persistent=False)
 
     def _initialize_from_svd(
         self,
@@ -324,7 +358,13 @@ class TLoraModule(LycorisBaseModule):
             torch.cuda.empty_cache()
 
     def _get_mask(self, device: torch.device) -> torch.Tensor:
-        """Get the current timestep mask, defaulting to all ones."""
+        """Get the current timestep mask, defaulting to all ones.
+
+        Note: rank_dropout is intentionally NOT applied here. T-LoRA's
+        timestep mask is a structured rank selection (coarse-to-fine);
+        random rank dropout would undermine this and can zero out all
+        active ranks at high-noise timesteps.
+        """
         mask = get_timestep_mask(self.mask_group_id)
         if mask is None:
             mask = torch.ones(1, self.lora_dim)
@@ -345,6 +385,9 @@ class TLoraModule(LycorisBaseModule):
         p_weight: torch.Tensor,
         lambda_weight: torch.Tensor,
         alpha: torch.Tensor,
+        base_q: Optional[torch.Tensor] = None,
+        base_p: Optional[torch.Tensor] = None,
+        base_lambda: Optional[torch.Tensor] = None,
     ):
         """Reconstruct module from saved state dict."""
         lora_dim = q_weight.shape[0] if q_weight.dim() == 2 else q_weight.shape[0]
@@ -359,15 +402,45 @@ class TLoraModule(LycorisBaseModule):
         module.q_layer.weight.data.copy_(q_weight)
         module.p_layer.weight.data.copy_(p_weight)
         module.lambda_layer.data.copy_(lambda_weight)
+
+        if base_q is not None:
+            module.base_q.copy_(base_q)
+        if base_p is not None:
+            module.base_p.copy_(base_p)
+        if base_lambda is not None:
+            module.base_lambda.copy_(base_lambda)
         return module
 
+    def load_weight_hook(self, module: nn.Module, incompatible_keys):
+        missing_keys = incompatible_keys.missing_keys
+        for key in missing_keys:
+            if "scalar" in key:
+                del missing_keys[missing_keys.index(key)]
+        if isinstance(self.scalar, nn.Parameter):
+            self.scalar.data.copy_(torch.ones_like(self.scalar))
+        elif getattr(self, "scalar", None) is not None:
+            self.scalar.copy_(torch.ones_like(self.scalar))
+        else:
+            self.register_buffer(
+                "scalar", torch.ones_like(self.scalar), persistent=False
+            )
+
     def custom_state_dict(self):
-        """Return state dict for saving."""
+        """Return state dict for saving.
+
+        Scalar is baked into both lambda_layer and base_lambda so that
+        s*(P@diag(λm)@Q - P_base@diag(λ_base*m)@Q_base) is preserved
+        when scalar resets to 1.0 on load.
+        """
+        scalar = self.scalar.to(device=self.lambda_layer.device, non_blocking=True)
         return {
             "q_layer.weight": self.q_layer.weight,
             "p_layer.weight": self.p_layer.weight,
-            "lambda_layer": self.lambda_layer,
+            "lambda_layer": self.lambda_layer * scalar,
             "alpha": self.alpha,
+            "base_q": self.base_q,
+            "base_p": self.base_p,
+            "base_lambda": self.base_lambda * scalar,
         }
 
     def get_diff_weight(self, multiplier=1.0, shape=None, device=None):
@@ -415,7 +488,7 @@ class TLoraModule(LycorisBaseModule):
             base = p_base @ (lam_base.T * q_base)
             diff = curr - base
 
-        diff = diff * self.scale * multiplier
+        diff = diff * self.scalar.to(device) * self.scale * multiplier
 
         if shape is not None:
             diff = diff.view(shape)
@@ -425,24 +498,25 @@ class TLoraModule(LycorisBaseModule):
     def get_merged_weight(self, multiplier=1.0, shape=None, device=None):
         """Get original weight + LoRA delta."""
         diff, _ = self.get_diff_weight(multiplier=multiplier, shape=shape, device=device)
-        weight = self.org_weight
-        if device is not None:
-            weight = weight.to(device)
+        weight = self.get_org_weight_for_compute(diff.device)
+        if weight.dtype != diff.dtype:
+            weight = weight.to(diff.dtype)
 
         # For conv with non-1x1 kernel, we need to handle shape mismatch
         if self.isconv and diff.shape != weight.shape:
             # diff is 1x1, weight has kernel - can't directly add
-            # This is a limitation; for full merge, would need to expand diff
-            # For now, return weight + diff padded to kernel size
+            # Place the 1x1 diff at the padding offset in the kernel so that
+            # conv(x, merged, stride=s, padding=p) = conv(x, orig, stride=s, padding=p) + conv(x, diff_1x1, stride=s, padding=0)
             kernel_size = weight.shape[2:]
             if all(k == 1 for k in kernel_size):
                 merged = weight + diff
             else:
-                # Expand 1x1 diff to kernel size by padding
-                pad_dims = []
-                for k in reversed(kernel_size):
-                    pad_dims.extend([0, k - 1])
-                diff_expanded = F.pad(diff, pad_dims)
+                diff_expanded = torch.zeros_like(weight)
+                padding = self.kw_dict.get("padding", tuple(k // 2 for k in kernel_size))
+                center_slices = (slice(None), slice(None)) + tuple(
+                    slice(p, p + 1) for p in padding
+                )
+                diff_expanded[center_slices] = diff
                 merged = weight + diff_expanded
         else:
             merged = weight + diff
@@ -512,7 +586,7 @@ class TLoraModule(LycorisBaseModule):
             base_out = self.up_op(q_base_scaled, self.base_p.to(dtype), None)
 
         diff = curr_out - base_out
-        return self.dropout(diff * self.scale * scale)
+        return self.drop(diff * self.scalar.to(device) * self.scale * scale)
 
     def bypass_forward(self, x: torch.Tensor, scale: float = 1.0) -> torch.Tensor:
         """Forward with bypass mode (compute LoRA separately)."""
@@ -524,25 +598,20 @@ class TLoraModule(LycorisBaseModule):
             if torch.rand(1) < self.module_dropout:
                 return self.org_forward(x, *args, **kwargs)
 
-        if self.bypass_mode:
+        # For conv with non-1x1 kernel or groups > 1, always use bypass mode
+        # since diff is computed with 1x1 groups=1 shape
+        if self.bypass_mode or (
+            self.isconv
+            and (any(k != 1 for k in self.shape[2:]) or self.kw_dict.get("groups", 1) > 1)
+        ):
             return self.bypass_forward(x, scale=self.multiplier)
 
-        # Standard forward: compute full weight and apply
+        # Standard forward: org_forward(x) + delta
         base = self.org_forward(x, *args, **kwargs)
-        device = x.device
+        diff_weight, _ = self.get_diff_weight(multiplier=self.multiplier, device=x.device)
+        diff_weight = diff_weight.to(self.dtype)
 
-        base_weight = self._current_weight().to(device)
-        diff_weight, _ = self.get_diff_weight(multiplier=self.multiplier, device=device)
-        diff_weight = diff_weight.to(base_weight.dtype)
-
-        # For conv with different kernel sizes, use bypass mode logic
-        if self.isconv and diff_weight.shape != base_weight.shape:
-            return self.bypass_forward(x, scale=self.multiplier)
-
-        new_weight = base_weight + diff_weight
-        delta_weight = new_weight - base_weight
-
-        delta = self.op(x, delta_weight, None, **self.kw_dict)
+        delta = self.op(x, diff_weight, None, **self.kw_dict)
         return base + delta
 
     @torch.no_grad()
@@ -556,7 +625,6 @@ class TLoraModule(LycorisBaseModule):
 
         scaled = norm != desired
         if scaled:
-            # Scale the lambda layer to reduce norm
-            self.lambda_layer.data *= ratio
+            self.scalar *= ratio
 
         return scaled, orig_norm * ratio
