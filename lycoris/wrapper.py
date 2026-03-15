@@ -191,6 +191,7 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         for p in anima_default_excludes:
             if p not in LycorisNetwork.TARGET_EXCLUDE_NAME:
                 LycorisNetwork.TARGET_EXCLUDE_NAME.append(p)
+        logger.info(f"Anima model detected: added {anima_default_excludes} to target exclude names")
 
     logger.info(f"Using rank adaptation algo: {algo}")
 

@@ -157,7 +157,7 @@ def create_network(
     if isinstance(unet, torch.nn.Module):
         _is_anima = unet.__class__.__name__.lower() == "anima"
     if _is_anima:
-        if  "Block" in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
+        if "Block" in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
             anima_extra_modules = ["PatchEmbed", "TimestepEmbedding", "FinalLayer"]
             for m in anima_extra_modules:
                 if m not in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
@@ -168,6 +168,7 @@ def create_network(
         for p in anima_default_excludes:
             if p not in LycorisNetworkKohya.TARGET_EXCLUDE_NAME:
                 LycorisNetworkKohya.TARGET_EXCLUDE_NAME.append(p)
+        logger.info(f"Anima model detected: added {anima_default_excludes} to target exclude names")
 
     logger.info(f"Using rank adaptation algo: {algo}")
 
