@@ -156,12 +156,18 @@ def create_network(
     _is_anima = False
     if isinstance(unet, torch.nn.Module):
         _is_anima = unet.__class__.__name__.lower() == "anima"
-    if _is_anima and "Block" in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
-        anima_extra_modules = ["PatchEmbed", "TimestepEmbedding"]
-        for m in anima_extra_modules:
-            if m not in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
-                LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE.append(m)
-        logger.info(f"Anima model detected: added {anima_extra_modules} to target modules")
+    if _is_anima:
+        if  "Block" in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
+            anima_extra_modules = ["PatchEmbed", "TimestepEmbedding", "FinalLayer"]
+            for m in anima_extra_modules:
+                if m not in LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE:
+                    LycorisNetworkKohya.UNET_TARGET_REPLACE_MODULE.append(m)
+            logger.info(f"Anima model detected: added {anima_extra_modules} to target modules")
+
+        anima_default_excludes = [r".*(_modulation|_norm|_embedder|final_layer).*"]
+        for p in anima_default_excludes:
+            if p not in LycorisNetworkKohya.TARGET_EXCLUDE_NAME:
+                LycorisNetworkKohya.TARGET_EXCLUDE_NAME.append(p)
 
     logger.info(f"Using rank adaptation algo: {algo}")
 
@@ -366,6 +372,7 @@ class LycorisNetworkKohya(LycorisNetwork):
     MODULE_ALGO_MAP = {}
     NAME_ALGO_MAP = {}
     USE_FNMATCH = False
+    TARGET_EXCLUDE_NAME = []
 
     @classmethod
     def apply_preset(cls, preset):
@@ -539,16 +546,30 @@ class LycorisNetworkKohya(LycorisNetwork):
             root_module: torch.nn.Module,
             algo,
             configs={},
+            full_prefix: str = "",
         ):
             loras = {}
             lora_names = []
             for name, module in root_module.named_modules():
+                full_name = (
+                    f"{full_prefix}.{name}" if full_prefix and name else (full_prefix or name)
+                )
+                if self.TARGET_EXCLUDE_NAME and (
+                    full_name in self.TARGET_EXCLUDE_NAME
+                    or any(self.match_fn(t, full_name) for t in self.TARGET_EXCLUDE_NAME)
+                ):
+                    continue
+
                 module_name = module.__class__.__name__
                 if module_name in self.MODULE_ALGO_MAP and module is not root_module:
                     next_config = self.MODULE_ALGO_MAP[module_name]
                     next_algo = next_config.get("algo", algo)
                     new_loras, new_lora_names = create_modules_(
-                        f"{prefix}_{name}", module, next_algo, next_config
+                        f"{prefix}_{name}",
+                        module,
+                        next_algo,
+                        next_config,
+                        full_prefix=full_name,
                     )
                     for lora_name, lora in zip(new_lora_names, new_loras):
                         if lora_name not in loras:
@@ -580,6 +601,12 @@ class LycorisNetworkKohya(LycorisNetwork):
             loras = []
             next_config = {}
             for name, module in root_module.named_modules():
+                if self.TARGET_EXCLUDE_NAME and (
+                    name in self.TARGET_EXCLUDE_NAME
+                    or any(self.match_fn(t, name) for t in self.TARGET_EXCLUDE_NAME)
+                ):
+                    continue
+
                 module_name = module.__class__.__name__
                 if module_name in target_replace_modules and not any(
                     self.match_fn(t, name) for t in target_replace_names
@@ -590,9 +617,13 @@ class LycorisNetworkKohya(LycorisNetwork):
                     else:
                         algo = network_module
                     loras.extend(
-                        create_modules_(f"{prefix}_{name}", module, algo, next_config)[
-                            0
-                        ]
+                        create_modules_(
+                            f"{prefix}_{name}",
+                            module,
+                            algo,
+                            next_config,
+                            full_prefix=name,
+                        )[0]
                     )
                     next_config = {}
                 elif name in target_replace_names or any(
