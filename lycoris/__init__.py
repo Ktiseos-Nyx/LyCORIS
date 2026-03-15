@@ -21,6 +21,7 @@ from .modules.tlora import (
     get_timestep_mask,
     clear_timestep_mask,
     compute_timestep_mask,
+    compute_timestep_mask_batch,
 )
 from .modules import make_module
 

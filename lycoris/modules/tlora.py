@@ -85,6 +85,40 @@ def compute_timestep_mask(
     return mask
 
 
+def compute_timestep_mask_batch(
+    timesteps: torch.Tensor,
+    max_timestep: int,
+    max_rank: int,
+    min_rank: int = 1,
+    alpha: float = 1.0,
+) -> torch.Tensor:
+    """
+    Compute per-sample binary rank masks for a batch of timesteps.
+
+    This avoids the bias of using a single mask (e.g. max timestep) for
+    the entire batch: each sample gets a mask matching its own noise level.
+
+    Args:
+        timesteps: Tensor of shape (B,) with timestep values
+        max_timestep: Maximum timestep (e.g., 1000)
+        max_rank: Maximum rank (all ranks active at t=0)
+        min_rank: Minimum rank (active even at t=max_timestep)
+        alpha: Scaling exponent (1.0 = linear, >1 = more aggressive at high noise)
+
+    Returns:
+        Binary mask of shape (B, max_rank)
+    """
+    t = timesteps.float()
+    # Active ranks per sample: higher timestep -> fewer ranks
+    r_float = ((max_timestep - t) / max_timestep) ** alpha * (max_rank - min_rank) + min_rank
+    r_int = r_float.int().clamp(min=min_rank, max=max_rank)  # (B,)
+
+    # Build (B, max_rank) mask: position j is active if j < r_int[i]
+    rank_indices = torch.arange(max_rank, device=timesteps.device).unsqueeze(0)  # (1, max_rank)
+    mask = (rank_indices < r_int.unsqueeze(1)).float()  # (B, max_rank)
+    return mask
+
+
 @cache
 def log_tlora_init():
     return logger.info(
@@ -555,34 +589,70 @@ class TLoraModule(LycorisBaseModule):
 
         return p_reg, q_reg
 
+    @staticmethod
+    def _reshape_lam_for_broadcast(lam: torch.Tensor, q_out: torch.Tensor) -> torch.Tensor:
+        """Reshape lam to broadcast with q_out.
+
+        lam is (1, rank) or (B, rank).  q_out is (B, rank, *spatial) for conv
+        or (B, [seq,] rank) for linear.  We need lam in the rank-dim position
+        with singleton dims for everything else.
+
+        For conv: q_out is (B, rank, H, W, ...) -> lam needs (B_or_1, rank, 1, 1, ...)
+        For linear 2-D: q_out is (B, rank) -> lam is already fine as (B_or_1, rank)
+        For linear 3-D: q_out is (B, seq, rank) -> lam needs (B_or_1, 1, rank)
+        """
+        if q_out.dim() == lam.dim():
+            # Both 2-D: (B, rank) * (B_or_1, rank) — works directly
+            return lam
+
+        if q_out.dim() > lam.dim():
+            # q_out has extra dims. Figure out where rank sits.
+            # Conv: rank is dim 1, extra spatial dims follow -> pad trailing
+            # Linear 3-D: rank is dim -1, seq is dim 1 -> pad middle
+            rank_dim = lam.shape[-1]
+            if q_out.shape[1] == rank_dim:
+                # Conv layout: (B, rank, *spatial)
+                return lam.view(*lam.shape, *([1] * (q_out.dim() - lam.dim())))
+            else:
+                # Linear layout: (B, seq, rank)
+                # Insert singleton dims between batch and rank
+                n_middle = q_out.dim() - lam.dim()
+                shape = (lam.shape[0],) + (1,) * n_middle + (lam.shape[1],)
+                return lam.view(*shape)
+
+        return lam
+
     def bypass_forward_diff(self, x: torch.Tensor, scale: float = 1.0) -> torch.Tensor:
-        """Compute LoRA contribution in bypass mode."""
+        """Compute LoRA contribution in bypass mode.
+
+        Supports both (1, rank) and (B, rank) masks for per-sample timestep masking.
+        """
         device = x.device
         dtype = x.dtype
         mask = self._get_mask(device)
 
-        lam = self.lambda_layer.to(device) * mask
-        lam_base = self.base_lambda.to(device) * mask
+        lam = self.lambda_layer.to(device) * mask       # (1, rank) or (B, rank)
+        lam_base = self.base_lambda.to(device) * mask   # (1, rank) or (B, rank)
 
         if self.isconv:
             # Current path: x -> Q -> scale by λ -> P
             q_out = self.down_op(x, self.q_layer.weight.to(dtype), None, **self.kw_dict_down)
-            q_out_scaled = q_out * lam.view(1, -1, *([1] * (q_out.dim() - 2)))
+            q_out_scaled = q_out * self._reshape_lam_for_broadcast(lam, q_out)
             curr_out = self.up_op(q_out_scaled, self.p_layer.weight.to(dtype), None, **self.kw_dict_up)
 
             # Base path
             q_base_out = self.down_op(x, self.base_q.to(dtype), None, **self.kw_dict_down)
-            q_base_scaled = q_base_out * lam_base.view(1, -1, *([1] * (q_base_out.dim() - 2)))
+            q_base_scaled = q_base_out * self._reshape_lam_for_broadcast(lam_base, q_base_out)
             base_out = self.up_op(q_base_scaled, self.base_p.to(dtype), None, **self.kw_dict_up)
         else:
             # Current path
             q_out = self.down_op(x, self.q_layer.weight.to(dtype), None)
-            q_out_scaled = q_out * lam
+            q_out_scaled = q_out * self._reshape_lam_for_broadcast(lam, q_out)
             curr_out = self.up_op(q_out_scaled, self.p_layer.weight.to(dtype), None)
 
             # Base path
             q_base_out = self.down_op(x, self.base_q.to(dtype), None)
-            q_base_scaled = q_base_out * lam_base
+            q_base_scaled = q_base_out * self._reshape_lam_for_broadcast(lam_base, q_base_out)
             base_out = self.up_op(q_base_scaled, self.base_p.to(dtype), None)
 
         diff = curr_out - base_out
@@ -592,6 +662,11 @@ class TLoraModule(LycorisBaseModule):
         """Forward with bypass mode (compute LoRA separately)."""
         return self.org_forward(x) + self.bypass_forward_diff(x, scale=scale)
 
+    def _has_batched_mask(self) -> bool:
+        """Check if the current timestep mask is per-sample (B > 1)."""
+        mask = get_timestep_mask(self.mask_group_id)
+        return mask is not None and mask.shape[0] > 1
+
     def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         """Forward pass with timestep-dependent rank masking."""
         if self.module_dropout and self.training:
@@ -599,8 +674,10 @@ class TLoraModule(LycorisBaseModule):
                 return self.org_forward(x, *args, **kwargs)
 
         # For conv with non-1x1 kernel or groups > 1, always use bypass mode
-        # since diff is computed with 1x1 groups=1 shape
-        if self.bypass_mode or (
+        # since diff is computed with 1x1 groups=1 shape.
+        # Also use bypass when a per-sample (batched) mask is active, because
+        # get_diff_weight produces a single weight matrix that can't vary per sample.
+        if self.bypass_mode or self._has_batched_mask() or (
             self.isconv
             and (any(k != 1 for k in self.shape[2:]) or self.kw_dict.get("groups", 1) > 1)
         ):
