@@ -555,7 +555,6 @@ class LycorisNetworkKohya(LycorisNetwork):
                     full_name in self.TARGET_EXCLUDE_NAME
                     or any(self.match_fn(t, full_name) for t in self.TARGET_EXCLUDE_NAME)
                 ):
-                    logger.info(f"Skipping {full_name} due to TARGET_EXCLUDE_NAME")
                     continue
 
                 module_name = module.__class__.__name__
