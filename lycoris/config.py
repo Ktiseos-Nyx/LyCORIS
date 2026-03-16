@@ -202,7 +202,7 @@ PRESET = {
         "text_encoder_target_module": [],
         "text_encoder_target_name": [],
     },
-    "anima-lora-conv": {
+    "anima": {
         "enable_conv": True,
         "unet_target_module": [
             "Block"
@@ -212,7 +212,7 @@ PRESET = {
         "text_encoder_target_name": [],
         "exclude_name": [r".*(_modulation|_embedder|final_layer).*"],
     },
-    "anima-lora-conv-risky": {
+    "anima-full-no-excludes": {
         "enable_conv": True,
         "unet_target_module": [
             "Block",
