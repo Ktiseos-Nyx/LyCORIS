@@ -202,6 +202,29 @@ PRESET = {
         "text_encoder_target_module": [],
         "text_encoder_target_name": [],
     },
+    "anima-lora-conv": {
+        "enable_conv": True,
+        "unet_target_module": [
+            "Block"
+        ],
+        "unet_target_name": [],
+        "text_encoder_target_module": [],
+        "text_encoder_target_name": [],
+        "exclude_name": [r".*(_modulation|_embedder|final_layer).*"],
+    },
+    "anima-lora-conv-risky": {
+        "enable_conv": True,
+        "unet_target_module": [
+            "Block",
+            "PatchEmbed",
+            "TimestepEmbedding",
+            "FinalLayer",
+        ],
+        "unet_target_name": [],
+        "text_encoder_target_module": [],
+        "text_encoder_target_name": [],
+        "exclude_name": [],
+    },
     "ia3": {
         "enable_conv": False,
         "unet_target_module": [],

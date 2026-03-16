@@ -179,19 +179,12 @@ def create_lycoris(module, multiplier=1.0, linear_dim=4, linear_alpha=1, **kwarg
         _has_block = "Block" in LycorisNetwork.TARGET_REPLACE_MODULE
         if isinstance(preset, dict):
             _has_block = _has_block or "Block" in preset.get("unet_target_module", [])
-        if _has_block:
-            anima_extra_modules = ["PatchEmbed", "TimestepEmbedding", "FinalLayer"]
-            for m in anima_extra_modules:
-                if m not in LycorisNetwork.TARGET_REPLACE_MODULE:
-                    LycorisNetwork.TARGET_REPLACE_MODULE.append(m)
-            logger.info(f"Anima model detected: added {anima_extra_modules} to target modules")
-
-        # Match sd-scripts networks/lora_anima.py default exclusions
-        anima_default_excludes = [r".*(_modulation|_norm|_embedder|final_layer).*"]
-        for p in anima_default_excludes:
-            if p not in LycorisNetwork.TARGET_EXCLUDE_NAME:
-                LycorisNetwork.TARGET_EXCLUDE_NAME.append(p)
-        logger.info(f"Anima model detected: added {anima_default_excludes} to target exclude names")
+        if "exclude_name" not in preset:
+            anima_default_excludes = [r".*(_modulation|_embedder|final_layer).*"]
+            for p in anima_default_excludes:
+                if p not in LycorisNetwork.TARGET_EXCLUDE_NAME:
+                    LycorisNetwork.TARGET_EXCLUDE_NAME.append(p)
+            logger.info(f"Anima model detected: added {anima_default_excludes} to target exclude names")
 
     logger.info(f"Using rank adaptation algo: {algo}")
 
