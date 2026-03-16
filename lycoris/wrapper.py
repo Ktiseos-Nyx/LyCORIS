@@ -330,7 +330,7 @@ class LycorisNetwork(torch.nn.Module):
         module: nn.Module,
         multiplier=1.0,
         lora_dim=4,
-        conv_lora_dim=4,
+        conv_lora_dim=0,
         alpha=1,
         conv_alpha=1,
         use_tucker=False,
