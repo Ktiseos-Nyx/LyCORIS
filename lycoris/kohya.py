@@ -41,7 +41,7 @@ try:
 except ImportError:
     CPUBouncingLinear = type(None)
 
-LORA_PLUS_TARGETS = ["lora_up", "a1", "b1", "p_layer"]
+LORA_PLUS_TARGETS = ["lora_up","a1","b1"]
 
 
 def create_network(
